@@ -114,6 +114,16 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Health check endpoint for Render
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    version: '1.0.0'
+  });
+});
+
 // API routes
 app.use('/api', require('./routes'));
 

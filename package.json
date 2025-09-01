@@ -1,4 +1,29 @@
 {
+  "name": "ticket-ghar",
+  "version": "1.0.0",
+  "description": "TicketGhar - Complete ticket management system with queue management",
+  "main": "backend/src/server.js",
+  "scripts": {
+    "start": "cd backend && npm start",
+    "dev": "cd backend && npm run dev",
+    "install-backend": "cd backend && npm install",
+    "install-frontend": "cd frontend && npm install",
+    "install-all": "npm run install-backend && npm run install-frontend",
+    "build": "cd frontend && npm run build",
+    "migrate": "cd backend && npm run migrate"
+  },
+  "keywords": [
+    "tickets",
+    "queue-management", 
+    "event-management",
+    "nodejs",
+    "react"
+  ],
+  "author": "The-Migration",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
   "dependencies": {
     "axios": "^1.10.0",
     "node-cron": "^4.2.1",
