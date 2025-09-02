@@ -30,13 +30,14 @@ if (process.env.DATABASE_URL) {
   config.host = url.hostname;
   config.port = url.port;
   
-  // SSL configuration for production
-  if (process.env.NODE_ENV === 'production') {
-    config.dialectOptions.ssl = {
+  // SSL configuration for production (Render requires SSL)
+  config.dialectOptions = {
+    ...config.dialectOptions,
+    ssl: {
       require: true,
       rejectUnauthorized: false
-    };
-  }
+    }
+  };
 }
 
 module.exports = config; 
