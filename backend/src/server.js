@@ -124,6 +124,20 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Root route
+app.get('/', (req, res) => {
+  res.json({
+    message: '🎫 TicketGhar API Server',
+    status: 'running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      api: '/api',
+      docs: 'API documentation available at /api'
+    }
+  });
+});
+
 // API routes
 app.use('/api', require('./routes'));
 
