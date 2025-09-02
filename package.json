@@ -14,7 +14,7 @@
   },
   "keywords": [
     "tickets",
-    "queue-management", 
+    "queue-management",
     "event-management",
     "nodejs",
     "react"
@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "axios": "^1.10.0",
+    "dotenv": "^17.2.1",
     "node-cron": "^4.2.1",
     "nodemailer": "^7.0.5",
     "pdfkit": "^0.17.1"
