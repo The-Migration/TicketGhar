@@ -186,6 +186,42 @@ module.exports = (sequelize) => {
       allowNull: true,
       field: 'refund_reference'
     },
+    // Admin refund management fields
+    adminNotes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'admin_notes'
+    },
+    refundRequestedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'refund_requested_at'
+    },
+    refundRequestReason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'refund_request_reason'
+    },
+    refundPriority: {
+      type: DataTypes.ENUM('low', 'normal', 'high', 'urgent'),
+      defaultValue: 'normal',
+      field: 'refund_priority'
+    },
+    internalRefundStatus: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      field: 'internal_refund_status'
+    },
+    adminOverride: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      field: 'admin_override'
+    },
+    overrideReason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'override_reason'
+    },
     // Security and verification
     securityCode: {
       type: DataTypes.STRING(20),

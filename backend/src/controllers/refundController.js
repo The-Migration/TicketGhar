@@ -256,9 +256,279 @@ const getRefundAnalytics = async (req, res) => {
   }
 };
 
+// Get all refund requests for admin panel
+const getAllRefundRequests = async (req, res) => {
+  try {
+    const { status, eventId, page = 1, limit = 20 } = req.query;
+    const offset = (page - 1) * limit;
+    
+    // Build where clause
+    const whereClause = {};
+    if (status) {
+      if (status === 'allowed') {
+        // Tickets that can be refunded (active and within deadline)
+        whereClause.status = 'active';
+      } else if (status === 'expired') {
+        // Tickets that are active but past refund deadline
+        whereClause.status = 'active';
+      } else if (status === 'refunded') {
+        whereClause.status = 'refunded';
+      }
+    }
+    
+    if (eventId) {
+      whereClause.eventId = eventId;
+    }
+    
+    const tickets = await Ticket.findAndCountAll({
+      where: whereClause,
+      include: [
+        {
+          model: Event,
+          as: 'event',
+          attributes: ['id', 'name', 'startDate', 'refundDeadline', 'refundPolicy']
+        },
+        {
+          model: Order,
+          as: 'order',
+          attributes: ['id', 'customerName', 'customerEmail', 'customerPhone']
+        }
+      ],
+      order: [['createdAt', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+    
+    // Process tickets to add refund status
+    const processedTickets = tickets.rows.map(ticket => {
+      const refundCheck = ticket.canRefund();
+      const now = new Date();
+      const deadline = ticket.event?.refundDeadline ? new Date(ticket.event.refundDeadline) : null;
+      
+      let refundStatus = 'unknown';
+      if (ticket.status === 'refunded') {
+        refundStatus = 'refunded';
+      } else if (ticket.status === 'active' && refundCheck.canRefund) {
+        refundStatus = 'allowed';
+      } else if (ticket.status === 'active' && !refundCheck.canRefund) {
+        refundStatus = 'expired';
+      } else {
+        refundStatus = ticket.status; // used, cancelled, etc.
+      }
+      
+      return {
+        id: ticket.id,
+        ticketCode: ticket.ticketCode,
+        holderName: ticket.holderName,
+        holderEmail: ticket.holderEmail,
+        status: ticket.status,
+        refundStatus,
+        canRefund: refundCheck.canRefund,
+        refundStatusReason: refundCheck.reason,
+        refundedAt: ticket.refundedAt,
+        refundedBy: ticket.refundedBy,
+        refundReason: ticket.refundReason,
+        event: ticket.event,
+        order: ticket.order,
+        createdAt: ticket.createdAt,
+        updatedAt: ticket.updatedAt
+      };
+    });
+    
+    // Filter by refund status if specified
+    let filteredTickets = processedTickets;
+    if (status && ['allowed', 'expired'].includes(status)) {
+      filteredTickets = processedTickets.filter(ticket => ticket.refundStatus === status);
+    }
+    
+    res.json({
+      tickets: filteredTickets,
+      pagination: {
+        total: tickets.count,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(tickets.count / limit)
+      },
+      summary: {
+        total: processedTickets.length,
+        allowed: processedTickets.filter(t => t.refundStatus === 'allowed').length,
+        expired: processedTickets.filter(t => t.refundStatus === 'expired').length,
+        refunded: processedTickets.filter(t => t.refundStatus === 'refunded').length
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error getting refund requests:', error);
+    res.status(500).json({ error: 'Failed to get refund requests' });
+  }
+};
+
+// Create manual refund request (for admin when customer calls/emails)
+const createManualRefundRequest = async (req, res) => {
+  try {
+    const { 
+      ticketCode, 
+      reason, 
+      contactMethod, 
+      customerNotes, 
+      adminNotes,
+      priority = 'normal' 
+    } = req.body;
+    
+    if (!ticketCode || !reason) {
+      return res.status(400).json({ error: 'Ticket code and reason are required' });
+    }
+    
+    // Find the ticket
+    const ticket = await Ticket.findOne({
+      where: { ticketCode },
+      include: [
+        {
+          model: Event,
+          as: 'event'
+        },
+        {
+          model: Order,
+          as: 'order'
+        }
+      ]
+    });
+    
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    
+    // Create a refund request record (we'll need to add this model)
+    // For now, we'll add notes to the ticket
+    await ticket.update({
+      adminNotes: adminNotes || `Manual refund request created by admin. Reason: ${reason}. Contact: ${contactMethod}. Customer notes: ${customerNotes}`,
+      refundRequestedAt: new Date(),
+      refundRequestReason: reason,
+      refundPriority: priority
+    });
+    
+    res.json({
+      message: 'Manual refund request created successfully',
+      ticket: {
+        id: ticket.id,
+        ticketCode: ticket.ticketCode,
+        holderName: ticket.holderName,
+        status: ticket.status,
+        event: ticket.event,
+        order: ticket.order,
+        refundRequestReason: reason,
+        adminNotes: ticket.adminNotes
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error creating manual refund request:', error);
+    res.status(500).json({ error: 'Failed to create manual refund request' });
+  }
+};
+
+// Admin override refund (bypass normal restrictions)
+const adminOverrideRefund = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const { reason, adminId, overrideReason } = req.body;
+    
+    if (!adminId || !overrideReason) {
+      return res.status(400).json({ error: 'Admin ID and override reason are required' });
+    }
+    
+    const ticket = await Ticket.findByPk(ticketId, {
+      include: [
+        {
+          model: Event,
+          as: 'event'
+        }
+      ]
+    });
+    
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    
+    // Admin override - process refund regardless of normal restrictions
+    await ticket.update({
+      status: 'refunded',
+      refundedAt: new Date(),
+      refundedBy: adminId,
+      refundReason: reason || 'Admin override refund',
+      adminOverride: true,
+      overrideReason: overrideReason,
+      adminNotes: `${ticket.adminNotes || ''}\nAdmin override refund processed by ${adminId}. Override reason: ${overrideReason}`
+    });
+    
+    // Update event's available tickets count
+    const event = await ticket.getEvent();
+    if (event) {
+      await event.increment('availableTickets');
+    }
+    
+    res.json({
+      message: 'Admin override refund processed successfully',
+      ticket: {
+        id: ticket.id,
+        ticketCode: ticket.ticketCode,
+        status: ticket.status,
+        refundedAt: ticket.refundedAt,
+        refundedBy: ticket.refundedBy,
+        refundReason: ticket.refundReason,
+        adminOverride: ticket.adminOverride,
+        overrideReason: ticket.overrideReason
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error processing admin override refund:', error);
+    res.status(500).json({ error: 'Failed to process admin override refund' });
+  }
+};
+
+// Update refund request status/notes
+const updateRefundRequest = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const { adminNotes, priority, internalStatus } = req.body;
+    
+    const ticket = await Ticket.findByPk(ticketId);
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    
+    const updateData = {};
+    if (adminNotes) updateData.adminNotes = adminNotes;
+    if (priority) updateData.refundPriority = priority;
+    if (internalStatus) updateData.internalRefundStatus = internalStatus;
+    
+    await ticket.update(updateData);
+    
+    res.json({
+      message: 'Refund request updated successfully',
+      ticket: {
+        id: ticket.id,
+        ticketCode: ticket.ticketCode,
+        adminNotes: ticket.adminNotes,
+        refundPriority: ticket.refundPriority,
+        internalRefundStatus: ticket.internalRefundStatus
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error updating refund request:', error);
+    res.status(500).json({ error: 'Failed to update refund request' });
+  }
+};
+
 module.exports = {
   getRefundStatus,
   processRefund,
   getEventRefunds,
-  getRefundAnalytics
+  getRefundAnalytics,
+  getAllRefundRequests,
+  createManualRefundRequest,
+  adminOverrideRefund,
+  updateRefundRequest
 };
