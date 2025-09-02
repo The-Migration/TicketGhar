@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: ticketghar-backend
+    name: ticketghar-fullstack
     env: node
-    buildCommand: cd backend && npm install
-    startCommand: cd backend && npm start
+    buildCommand: npm run install-all && npm run build && npm run migrate
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
