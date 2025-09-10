@@ -1,53 +1,86 @@
+version: '3.8'
+
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:14-alpine
-    container_name: ticket_ghar_postgres
+    image: postgres:15-alpine
+    container_name: ticket-ghar-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ticket_ghar_dev
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./backend/database/init:/docker-entrypoint-initdb.d
+    networks:
+      - ticket-ghar-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ticket_ghar_dev"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
       retries: 5
 
-  # Redis Cache & Queue
+  # Redis Cache
   redis:
-    image: redis:6-alpine
-    container_name: ticket_ghar_redis
+    image: redis:7-alpine
+    container_name: ticket-ghar-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    networks:
+      - ticket-ghar-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 5
+    command: redis-server --appendonly yes
 
-  # pgAdmin (Optional - for database management)
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: ticket_ghar_pgadmin
+  # Backend API (Optional - you can run this separately)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ticket-ghar-backend
+    restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@ticketghar.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      NODE_ENV: development
+      PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ticket_ghar
+      DB_USER: postgres
+      DB_PASSWORD: postgres123
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
+      JWT_EXPIRES_IN: 7d
     ports:
-      - "8080:80"
+      - "3001:3001"
     depends_on:
-      - postgres
-    profiles:
-      - tools
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - ticket-ghar-network
+    command: npm run dev
 
 volumes:
   postgres_data:
     driver: local
   redis_data:
-    driver: local 
+    driver: local
+
+networks:
+  ticket-ghar-network:
+    driver: bridge

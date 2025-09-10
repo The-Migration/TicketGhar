@@ -183,6 +183,15 @@ module.exports = (sequelize) => {
       allowNull: true,
       field: 'refunded_at'
     },
+    refundedBy: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      },
+      field: 'refunded_by'
+    },
     metadata: {
       type: DataTypes.JSONB,
       allowNull: true,

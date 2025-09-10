@@ -95,16 +95,15 @@ exports.joinQueue = async (req, res) => {
       }
     }
 
-    // Get next position in queue (only from active queue entries)
-    const lastEntry = await QueueEntry.findOne({
+    // Get next position in queue (count of active entries + 1)
+    const activeEntriesCount = await QueueEntry.count({
       where: { 
         eventId,
         status: { [Op.in]: ['waiting', 'active', 'processing'] }
       },
-      order: [['position', 'DESC']],
       transaction
     });
-    const nextPosition = (lastEntry?.position || 0) + 1;
+    const nextPosition = activeEntriesCount + 1;
 
     // Create session data
     const clientInfo = {

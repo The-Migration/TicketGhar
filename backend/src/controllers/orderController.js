@@ -1,10 +1,14 @@
-const { Order, OrderItem, Ticket, Event, User, TicketType, PurchaseSession } = require('../models');
+const { Order, OrderItem, Ticket, Event, User, TicketType, PurchaseSession, QueueEntry } = require('../models');
 const { Op } = require('sequelize');
-const { sendTicketEmail, generateTicketPDF } = require('../services/emailService');
+const { sendTicketEmail, generateTicketPDF, sendTicketConfirmationEmail } = require('../services/emailService');
 
 // Create order (usually called from purchase session)
 exports.createOrder = async (req, res) => {
   try {
+    console.log('🎫 Starting order creation process...');
+    console.log('🔍 Request body:', JSON.stringify(req.body, null, 2));
+    console.log('🔍 User info:', req.user ? { id: req.user.id, email: req.user.email, role: req.user.role } : 'No user');
+
     const {
       eventId,
       purchaseSessionId,
@@ -18,16 +22,33 @@ exports.createOrder = async (req, res) => {
 
     // Validate required fields
     if (!eventId || !items || !customerName || !customerEmail) {
+      console.error('❌ Missing required fields:', { eventId, items: !!items, customerName, customerEmail });
       return res.status(400).json({
         message: 'Missing required fields',
         required: ['eventId', 'items', 'customerName', 'customerEmail']
       });
     }
 
+    // Validate items array
+    if (!Array.isArray(items) || items.length === 0) {
+      console.error('❌ Invalid items array:', items);
+      return res.status(400).json({
+        message: 'Items must be a non-empty array'
+      });
+    }
+
     // Check if event exists
-    const event = await Event.findByPk(eventId);
-    if (!event) {
-      return res.status(404).json({ message: 'Event not found' });
+    let event;
+    try {
+      event = await Event.findByPk(eventId);
+      if (!event) {
+        console.error('❌ Event not found:', eventId);
+        return res.status(404).json({ message: 'Event not found' });
+      }
+      console.log('✅ Event found:', event.name);
+    } catch (error) {
+      console.error('❌ Error fetching event:', error);
+      return res.status(500).json({ message: 'Error fetching event', error: error.message });
     }
 
     // Check if sale has started - if so, user must be in queue with active purchase session
@@ -37,35 +58,59 @@ exports.createOrder = async (req, res) => {
 
     if (saleStarted) {
       // Sale has started - user must be in queue with active purchase session
-      if (!purchaseSessionId) {
-        return res.status(403).json({
-          message: 'Ticket sales have started. You must join the queue to purchase tickets.',
-          requiresQueue: true
-        });
+      if (!purchaseSessionId || (purchaseSessionId && purchaseSessionId.startsWith('session_'))) {
+        // For development/testing purposes, allow orders without purchase sessions or with dummy session IDs
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`⚠️  Development mode: Allowing order without valid purchase session for event ${eventId}`);
+        } else {
+          return res.status(403).json({
+            message: 'Ticket sales have started. You must join the queue to purchase tickets.',
+            requiresQueue: true
+          });
+        }
       }
 
-      // Check if user has an active purchase session
-      const purchaseSession = await PurchaseSession.findOne({
-        where: {
-          id: purchaseSessionId,
-          userId: req.user?.id,
-          status: 'active',
-          expiresAt: { [Op.gt]: now }
-        },
-        include: [
-          {
-            model: require('../models').QueueEntry,
-            as: 'queueEntry',
-            where: { eventId }
-          }
-        ]
-      });
+      // Check if user has an active purchase session (skip validation for dummy session IDs)
+      if (purchaseSessionId && !purchaseSessionId.startsWith('session_')) {
+        try {
+          const purchaseSession = await PurchaseSession.findOne({
+            where: {
+              id: purchaseSessionId,
+              userId: req.user?.id,
+              status: 'active',
+              expiresAt: { [Op.gt]: now }
+            },
+            include: [
+              {
+                model: QueueEntry,
+                as: 'queueEntry',
+                where: { eventId }
+              }
+            ]
+          });
 
-      if (!purchaseSession) {
-        return res.status(403).json({
-          message: 'You do not have an active purchase session. Please wait for your turn in the queue.',
-          requiresQueue: true
-        });
+          if (!purchaseSession) {
+            // For development/testing purposes, allow orders without valid purchase sessions
+            if (process.env.NODE_ENV === 'development') {
+              console.log(`⚠️  Development mode: Allowing order without valid purchase session ${purchaseSessionId}`);
+            } else {
+              return res.status(403).json({
+                message: 'You do not have an active purchase session. Please wait for your turn in the queue.',
+                requiresQueue: true
+              });
+            }
+          }
+        } catch (error) {
+          console.error('❌ Error validating purchase session:', error);
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`⚠️  Development mode: Allowing order despite purchase session validation error`);
+          } else {
+            return res.status(500).json({
+              message: 'Error validating purchase session',
+              error: error.message
+            });
+          }
+        }
       }
 
       console.log(`✅ User ${req.user?.id} has active purchase session ${purchaseSessionId} for event ${eventId}`);
@@ -75,32 +120,103 @@ exports.createOrder = async (req, res) => {
     let subtotalAmount = 0;
     const validatedItems = [];
 
+    console.log('🔍 Processing items:', items.length);
+
     for (const item of items) {
-      const ticketType = await TicketType.findByPk(item.ticketTypeId);
-      if (!ticketType) {
-        return res.status(400).json({
-          message: `Ticket type ${item.ticketTypeId} not found`
+      try {
+        // Validate item structure
+        if (!item.ticketTypeId || !item.quantity || item.quantity <= 0) {
+          console.error('❌ Invalid item structure:', item);
+          return res.status(400).json({
+            message: 'Invalid item structure. Each item must have ticketTypeId and quantity > 0'
+          });
+        }
+
+        // Fetch ticket type
+        const ticketType = await TicketType.findByPk(item.ticketTypeId);
+        if (!ticketType) {
+          console.error('❌ Ticket type not found:', item.ticketTypeId);
+          return res.status(400).json({
+            message: `Ticket type ${item.ticketTypeId} not found`
+          });
+        }
+
+        console.log('✅ Ticket type found:', ticketType.name, 'Available:', ticketType.getAvailableQuantity());
+
+        // Check purchase limits for this user (only if user is authenticated)
+        if (req.user?.id) {
+          console.log('🔍 Checking purchase limits for authenticated user:', req.user.id);
+          try {
+            const canPurchase = await ticketType.canPurchaseWithLimit(item.quantity, req.user.id);
+            console.log('🔍 Purchase limit check result:', canPurchase);
+            if (!canPurchase.allowed) {
+              return res.status(400).json({
+                message: canPurchase.reason,
+                ticketType: ticketType.name
+              });
+            }
+          } catch (error) {
+            console.error('🔍 Error in canPurchaseWithLimit:', error);
+            // In development, allow the purchase to continue
+            if (process.env.NODE_ENV === 'development') {
+              console.log('⚠️  Development mode: Allowing purchase despite limit check error');
+            } else {
+              throw error;
+            }
+          }
+        } else {
+          // For unauthenticated users, just check basic availability
+          console.log('🔍 Checking availability for unauthenticated user');
+          const availableQuantity = ticketType.getAvailableQuantity();
+          if (item.quantity > availableQuantity) {
+            return res.status(400).json({
+              message: `Only ${availableQuantity} tickets available`,
+              ticketType: ticketType.name
+            });
+          }
+          
+          if (item.quantity > ticketType.maxPerOrder) {
+            return res.status(400).json({
+              message: `Maximum ${ticketType.maxPerOrder} tickets per order allowed`,
+              ticketType: ticketType.name
+            });
+          }
+        }
+
+        // Calculate prices with fallbacks
+        let unitPrice, itemTotal, discountAmount;
+        try {
+          unitPrice = ticketType.calculateFinalPrice();
+          itemTotal = unitPrice * item.quantity;
+          discountAmount = ticketType.getDiscountAmount() * item.quantity;
+        } catch (error) {
+          console.error('❌ Error calculating prices:', error);
+          // Fallback to basic price calculation
+          unitPrice = ticketType.price || 0;
+          itemTotal = unitPrice * item.quantity;
+          discountAmount = 0;
+          console.log('⚠️  Using fallback price calculation');
+        }
+
+        subtotalAmount += itemTotal;
+
+        validatedItems.push({
+          ...item,
+          unitPrice,
+          totalPrice: itemTotal,
+          discountAmount
+        });
+
+        console.log('✅ Item validated:', ticketType.name, 'Qty:', item.quantity, 'Total:', itemTotal);
+
+      } catch (error) {
+        console.error('❌ Error processing item:', item, error);
+        return res.status(500).json({
+          message: 'Error processing item',
+          error: error.message,
+          item
         });
       }
-
-      // Check purchase limits for this user
-      const canPurchase = await ticketType.canPurchaseWithLimit(item.quantity, req.user?.id);
-      if (!canPurchase.allowed) {
-        return res.status(400).json({
-          message: canPurchase.reason,
-          ticketType: ticketType.name
-        });
-      }
-
-      const itemTotal = ticketType.calculateFinalPrice() * item.quantity;
-      subtotalAmount += itemTotal;
-
-      validatedItems.push({
-        ...item,
-        unitPrice: ticketType.calculateFinalPrice(),
-        totalPrice: itemTotal,
-        discountAmount: ticketType.getDiscountAmount() * item.quantity
-      });
     }
 
     // Calculate taxes and fees
@@ -108,69 +224,384 @@ exports.createOrder = async (req, res) => {
     const feeAmount = subtotalAmount * 0.03; // 3% processing fee
     const totalAmount = subtotalAmount + taxAmount + feeAmount;
 
+    // Determine order status based on session type
+    const isDummySession = purchaseSessionId && purchaseSessionId.startsWith('session_');
+    const orderStatus = isDummySession ? 'paid' : 'pending';
+    
+    console.log(`🎫 Creating order with status: ${orderStatus} (dummy session: ${isDummySession})`);
+
     // Create order
-    const order = await Order.create({
-      userId: req.user?.id,
-      eventId,
-      purchaseSessionId,
-      orderNumber: Order.sequelize.models.Order.generateOrderNumber ? Order.sequelize.models.Order.generateOrderNumber() : 'TG' + Date.now(),
-      status: 'pending',
-      totalAmount,
-      subtotalAmount,
-      taxAmount,
-      feeAmount,
-      discountAmount: validatedItems.reduce((sum, item) => sum + item.discountAmount, 0),
-      currency: event.currency || 'USD',
-      paymentMethod,
-      paymentDetails,
-      customerName,
-      customerEmail,
-      customerPhone,
-      orderDate: new Date()
-    });
+    let order;
+    try {
+      console.log('🔍 Creating order with data:', {
+        userId: req.user?.id || null,
+        eventId,
+        purchaseSessionId,
+        status: orderStatus,
+        totalAmount,
+        subtotalAmount,
+        taxAmount,
+        feeAmount
+      });
+
+      order = await Order.create({
+        userId: req.user?.id || null, // Allow null for unauthenticated users
+        eventId,
+        purchaseSessionId,
+        orderNumber: 'TG' + Date.now() + Math.random().toString(36).substr(2, 5).toUpperCase(), // Simple order number generation
+        status: orderStatus,
+        totalAmount,
+        subtotalAmount,
+        taxAmount,
+        feeAmount,
+        discountAmount: validatedItems.reduce((sum, item) => sum + item.discountAmount, 0),
+        currency: event.currency || 'USD',
+        paymentMethod: paymentMethod || 'dummy',
+        paymentDetails: paymentDetails || {},
+        customerName,
+        customerEmail,
+        customerPhone,
+        orderDate: new Date()
+      });
+
+      console.log('✅ Order created successfully:', order.id, 'Status:', order.status);
+    } catch (error) {
+      console.error('❌ Error creating order:', error);
+      return res.status(500).json({
+        message: 'Failed to create order',
+        error: error.message
+      });
+    }
 
     // Create order items
-    for (const item of validatedItems) {
-      const orderItem = await OrderItem.create({
-        orderId: order.id,
-        ticketTypeId: item.ticketTypeId,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        totalPrice: item.totalPrice,
-        discountAmount: item.discountAmount
+    try {
+      for (const item of validatedItems) {
+        console.log('🔍 Creating order item:', item);
+        const orderItem = await OrderItem.create({
+          orderId: order.id,
+          ticketTypeId: item.ticketTypeId,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          totalPrice: item.totalPrice,
+          discountAmount: item.discountAmount
+        });
+        console.log('✅ Order item created:', orderItem.id, 'for order:', order.id);
+      }
+    } catch (error) {
+      console.error('❌ Error creating order items:', error);
+      // Try to clean up the order if items creation fails
+      try {
+        await order.destroy();
+        console.log('🧹 Cleaned up order after item creation failure');
+      } catch (cleanupError) {
+        console.error('❌ Error cleaning up order:', cleanupError);
+      }
+      return res.status(500).json({
+        message: 'Failed to create order items',
+        error: error.message
       });
-      console.log('OrderController Debug - Created OrderItem:', orderItem.id, 'for Order:', order.id);
+    }
+
+    // For dummy sessions, automatically generate tickets since order is marked as 'paid'
+    if (isDummySession) {
+      console.log('🎫 Dummy session detected - generating tickets automatically');
+      try {
+        const generatedTickets = await order.generateTickets();
+        console.log('✅ Tickets generated successfully for dummy session order:', generatedTickets?.length || 'unknown count');
+        
+        // Send ticket confirmation email
+        if (generatedTickets && generatedTickets.length > 0) {
+          try {
+            console.log('📧 Sending ticket confirmation email to:', customerEmail);
+            await sendTicketConfirmationEmail({
+              to: customerEmail,
+              customerName,
+              order,
+              tickets: generatedTickets,
+              event
+            });
+            console.log('✅ Ticket confirmation email sent successfully');
+          } catch (emailError) {
+            console.error('❌ Error sending ticket confirmation email:', emailError);
+            // Don't fail the order if email fails
+          }
+        }
+      } catch (ticketError) {
+        console.error('❌ Error generating tickets for dummy session:', ticketError);
+        // Don't fail the order creation if ticket generation fails
+        console.log('⚠️  Order created but ticket generation failed - tickets can be generated later');
+      }
     }
 
     // Fetch complete order
-    const completeOrder = await Order.findByPk(order.id, {
+    let completeOrder;
+    try {
+      completeOrder = await Order.findByPk(order.id, {
+        include: [
+          {
+            model: OrderItem,
+            as: 'orderItems',
+            include: [
+              {
+                model: TicketType,
+                as: 'ticketType'
+              }
+            ]
+          },
+          {
+            model: Event,
+            as: 'event'
+          }
+        ]
+      });
+
+      if (!completeOrder) {
+        console.error('❌ Failed to fetch complete order after creation');
+        return res.status(500).json({
+          message: 'Order created but failed to fetch complete details'
+        });
+      }
+
+      console.log('✅ Order creation completed successfully:', completeOrder.id);
+      res.status(201).json({
+        message: 'Order created successfully',
+        order: completeOrder.toPublicJSON ? completeOrder.toPublicJSON() : completeOrder
+      });
+
+    } catch (error) {
+      console.error('❌ Error fetching complete order:', error);
+      res.status(201).json({
+        message: 'Order created successfully',
+        order: {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          totalAmount: order.totalAmount,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail
+        }
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Create order error:', error);
+    console.error('❌ Error stack:', error.stack);
+    res.status(500).json({
+      message: 'Failed to create order',
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};
+
+// Download ticket as PDF
+exports.downloadTicket = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    
+    // Find the ticket with event information
+    const ticket = await Ticket.findByPk(ticketId, {
       include: [
+        {
+          model: Event,
+          as: 'event'
+        },
+        {
+          model: TicketType,
+          as: 'ticketType'
+        }
+      ]
+    });
+
+    if (!ticket) {
+      return res.status(404).json({ message: 'Ticket not found' });
+    }
+
+    // Check if user has access to this ticket
+    if (req.user && req.user.id !== ticket.userId && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Generate PDF
+    const pdfBuffer = await generateTicketPDF({ 
+      event: ticket.event, 
+      ticket 
+    });
+
+    // Set response headers for PDF download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="ticket-${ticket.ticketNumber}.pdf"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+
+    // Send the PDF
+    res.send(pdfBuffer);
+
+  } catch (error) {
+    console.error('Download ticket error:', error);
+    res.status(500).json({
+      message: 'Failed to download ticket',
+      error: error.message
+    });
+  }
+};
+
+// Test PDF generation endpoint
+exports.testPDF = async (req, res) => {
+  try {
+    console.log('🧪 Testing PDF generation...');
+    
+    const testEvent = {
+      name: 'Test Event',
+      venue: 'Test Venue',
+      startDate: new Date()
+    };
+    
+    const testTicket = {
+      ticketCode: 'TEST-123',
+      ticketNumber: 'TKT-TEST-123',
+      holderName: 'Test User',
+      holderEmail: 'test@example.com'
+    };
+    
+    const { generateTicketPDF } = require('../services/emailService');
+    const pdfBuffer = await generateTicketPDF({ event: testEvent, ticket: testTicket });
+    
+    console.log('✅ Test PDF generated successfully, size:', pdfBuffer.length);
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="test-ticket.pdf"');
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('❌ Test PDF generation failed:', error);
+    res.status(500).json({ message: 'PDF generation test failed', error: error.message });
+  }
+};
+
+// Download all tickets for an order as ZIP
+exports.downloadOrderTickets = async (req, res) => {
+  try {
+    console.log('🎫 downloadOrderTickets - Function called!');
+    console.log('🎫 downloadOrderTickets - Request method:', req.method);
+    console.log('🎫 downloadOrderTickets - Request URL:', req.url);
+    console.log('🎫 downloadOrderTickets - Request params:', req.params);
+    
+    const { id: orderId } = req.params;
+    console.log('🔍 downloadOrderTickets - Requested order ID:', orderId);
+    console.log('🔍 downloadOrderTickets - User:', req.user?.id);
+    
+    // Find the order with tickets
+    const order = await Order.findByPk(orderId, {
+      include: [
+        {
+          model: Event,
+          as: 'event'
+        },
         {
           model: OrderItem,
           as: 'orderItems',
           include: [
             {
-              model: TicketType,
-              as: 'ticketType'
+              model: Ticket,
+              as: 'tickets',
+              include: [
+                {
+                  model: TicketType,
+                  as: 'ticketType'
+                }
+              ]
             }
           ]
-        },
-        {
-          model: Event,
-          as: 'event'
         }
       ]
     });
 
-    res.status(201).json({
-      message: 'Order created successfully',
-      order: completeOrder.toPublicJSON()
-    });
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    console.log('🔍 downloadOrderTickets - Order found:', order.id);
+    console.log('🔍 downloadOrderTickets - Order status:', order.status);
+    console.log('🔍 downloadOrderTickets - Order items count:', order.orderItems?.length || 0);
+
+    // Check if user has access to this order
+    if (req.user && req.user.id !== order.userId && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    // Collect all tickets from order items
+    const allTickets = [];
+    for (const orderItem of order.orderItems) {
+      console.log('🔍 downloadOrderTickets - OrderItem:', orderItem.id, 'Tickets:', orderItem.tickets?.length || 0);
+      if (orderItem.tickets) {
+        allTickets.push(...orderItem.tickets);
+      }
+    }
+    
+    console.log('🔍 downloadOrderTickets - Total tickets found:', allTickets.length);
+
+    if (allTickets.length === 0) {
+      return res.status(404).json({ message: 'No tickets found for this order' });
+    }
+
+    // If only one ticket, download as PDF
+    if (allTickets.length === 1) {
+      const ticket = allTickets[0];
+      console.log('🔍 downloadOrderTickets - Generating PDF for single ticket:', ticket.id);
+      console.log('🔍 downloadOrderTickets - Event data:', { id: order.event?.id, name: order.event?.name, title: order.event?.title });
+      console.log('🔍 downloadOrderTickets - Ticket data:', { id: ticket.id, ticketNumber: ticket.ticketNumber, ticketCode: ticket.ticketCode });
+      
+      try {
+        console.log('🔍 downloadOrderTickets - About to generate PDF...');
+        console.log('🔍 downloadOrderTickets - Event object:', order.event ? 'Present' : 'Missing');
+        console.log('🔍 downloadOrderTickets - Ticket object:', ticket ? 'Present' : 'Missing');
+        
+        const pdfBuffer = await generateTicketPDF({ 
+          event: order.event, 
+          ticket 
+        });
+        
+        console.log('✅ downloadOrderTickets - PDF generated successfully, size:', pdfBuffer.length);
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="ticket-${ticket.ticketNumber}.pdf"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
+        res.send(pdfBuffer);
+        return;
+      } catch (pdfError) {
+        console.error('❌ downloadOrderTickets - PDF generation error:', pdfError);
+        return res.status(500).json({ message: 'Failed to generate PDF', error: pdfError.message });
+      }
+    }
+
+    // For multiple tickets, create a ZIP file
+    const archiver = require('archiver');
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="tickets-order-${order.orderNumber}.zip"`);
+
+    archive.pipe(res);
+
+    // Add each ticket as a PDF to the ZIP
+    for (const ticket of allTickets) {
+      try {
+        const pdfBuffer = await generateTicketPDF({ 
+          event: order.event, 
+          ticket 
+        });
+        archive.append(pdfBuffer, { name: `ticket-${ticket.ticketNumber}.pdf` });
+      } catch (error) {
+        console.error(`Error generating PDF for ticket ${ticket.id}:`, error);
+      }
+    }
+
+    await archive.finalize();
 
   } catch (error) {
-    console.error('Create order error:', error);
+    console.error('❌ downloadOrderTickets - Main error:', error);
+    console.error('❌ downloadOrderTickets - Error stack:', error.stack);
     res.status(500).json({
-      message: 'Failed to create order',
+      message: 'Failed to download tickets',
       error: error.message
     });
   }
@@ -277,6 +708,12 @@ exports.getOrderById = async (req, res) => {
             { 
               model: Ticket, 
               as: 'tickets',
+              where: {
+                status: {
+                  [require('sequelize').Op.ne]: 'used' // Exclude scanned/used tickets
+                }
+              },
+              required: false,
               include: [
                 {
                   model: Event,
@@ -666,6 +1103,12 @@ exports.getOrderTickets = async (req, res) => {
             {
               model: Ticket,
               as: 'tickets',
+              where: {
+                status: {
+                  [require('sequelize').Op.ne]: 'used' // Exclude scanned/used tickets
+                }
+              },
+              required: false,
               include: [
                 {
                   model: Event,

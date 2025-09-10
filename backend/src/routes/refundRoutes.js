@@ -8,6 +8,7 @@ const {
   getRefundAnalytics,
   getAllRefundRequests,
   createManualRefundRequest,
+  approveRefundRequest,
   adminOverrideRefund,
   updateRefundRequest
 } = require('../controllers/refundController');
@@ -30,6 +31,9 @@ router.get('/admin/requests', authenticateToken, getAllRefundRequests);
 
 // Create manual refund request (when admin receives call/email)
 router.post('/admin/requests', authenticateToken, createManualRefundRequest);
+
+// Approve refund request (admin action)
+router.post('/admin/tickets/:ticketId/approve', authenticateToken, approveRefundRequest);
 
 // Admin override refund (bypass normal restrictions)
 router.post('/admin/tickets/:ticketId/override', authenticateToken, adminOverrideRefund);

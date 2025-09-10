@@ -14,7 +14,7 @@ cron.schedule('* * * * *', async () => {
       where: {
         ticketSaleStartTime: { [Op.lte]: now },
         ticketSaleEndTime: { [Op.gt]: now },
-        status: { [Op.in]: ['published', 'draft'] }
+        status: { [Op.in]: ['active', 'draft'] }
       }
     });
 
@@ -43,7 +43,7 @@ cron.schedule('* * * * *', async () => {
     const eventsSaleEnded = await Event.findAll({
       where: {
         ticketSaleEndTime: { [Op.lt]: now },
-        status: { [Op.in]: ['published', 'sale_started'] }
+        status: { [Op.in]: ['active', 'sale_started'] }
       }
     });
 

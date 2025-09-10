@@ -25,6 +25,7 @@ const QueueEntry = require('./QueueEntry')(sequelize);
 const PurchaseSession = require('./PurchaseSession')(sequelize);
 const OrderItem = require('./OrderItem')(sequelize);
 const Ticket = require('./Ticket')(sequelize);
+const Attendee = require('./Attendee')(sequelize);
 
 // ============================================
 // DEFINE COMPREHENSIVE ASSOCIATIONS
@@ -32,7 +33,6 @@ const Ticket = require('./Ticket')(sequelize);
 
 // User associations
 User.hasMany(Event, { foreignKey: 'createdById', as: 'createdEvents' });
-User.hasMany(Event, { foreignKey: 'organizerId', as: 'organizedEvents' });
 User.hasMany(QueueEntry, { foreignKey: 'userId', as: 'queueEntries' });
 User.hasMany(PurchaseSession, { foreignKey: 'userId', as: 'purchaseSessions' });
 User.hasMany(Order, { foreignKey: 'userId', as: 'orders' });
@@ -41,11 +41,11 @@ User.hasMany(Ticket, { foreignKey: 'transferredTo', as: 'transferredTickets' });
 
 // Event associations
 Event.belongsTo(User, { foreignKey: 'createdById', as: 'creator' });
-Event.belongsTo(User, { foreignKey: 'organizerId', as: 'organizer' });
 Event.hasMany(TicketType, { foreignKey: 'eventId', as: 'ticketTypes' });
 Event.hasMany(QueueEntry, { foreignKey: 'eventId', as: 'queueEntries' });
 Event.hasMany(Order, { foreignKey: 'eventId', as: 'orders' });
 Event.hasMany(Ticket, { foreignKey: 'eventId', as: 'tickets' });
+Event.hasMany(Attendee, { foreignKey: 'eventId', as: 'attendees' });
 
 // TicketType associations
 TicketType.belongsTo(Event, { foreignKey: 'eventId', as: 'event' });
@@ -79,6 +79,12 @@ Ticket.belongsTo(Event, { foreignKey: 'eventId', as: 'event' });
 Ticket.belongsTo(TicketType, { foreignKey: 'ticketTypeId', as: 'ticketType' });
 Ticket.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
 Ticket.belongsTo(User, { foreignKey: 'transferredTo', as: 'transferee' });
+Ticket.hasOne(Attendee, { foreignKey: 'ticketId', as: 'attendee' });
+
+// Attendee associations
+Attendee.belongsTo(Ticket, { foreignKey: 'ticketId', as: 'ticket' });
+Attendee.belongsTo(Event, { foreignKey: 'eventId', as: 'event' });
+Attendee.belongsTo(User, { foreignKey: 'scannedBy', as: 'scanner' });
 
 // Legacy Queue associations (for backward compatibility)
 User.hasMany(Queue, { foreignKey: 'userId', as: 'queues' });
@@ -261,6 +267,7 @@ module.exports = {
   Order,
   OrderItem,
   Ticket,
+  Attendee,
   // Legacy models (for backward compatibility)
   Queue,
   // Helper functions

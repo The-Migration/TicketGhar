@@ -262,23 +262,41 @@ const getAllRefundRequests = async (req, res) => {
     const { status, eventId, page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
     
-    // Build where clause
-    const whereClause = {};
-    if (status) {
+    // Build where clause - include tickets with refund requests OR specific statuses
+    let whereClause = {};
+    
+    // If no specific status filter, include all tickets with refund requests
+    if (!status || status === 'all') {
+      whereClause = {
+        [require('sequelize').Op.or]: [
+          { refundRequestedAt: { [require('sequelize').Op.ne]: null } },
+          { refundRequestReason: { [require('sequelize').Op.ne]: null } }
+        ]
+      };
+    } else {
+      // For specific status filters, use the original logic
       if (status === 'allowed') {
-        // Tickets that can be refunded (active and within deadline)
         whereClause.status = 'active';
       } else if (status === 'expired') {
-        // Tickets that are active but past refund deadline
         whereClause.status = 'active';
       } else if (status === 'refunded') {
         whereClause.status = 'refunded';
+      } else if (status === 'requested') {
+        // For requested status, look for tickets with refund requests
+        whereClause = {
+          [require('sequelize').Op.or]: [
+            { refundRequestedAt: { [require('sequelize').Op.ne]: null } },
+            { refundRequestReason: { [require('sequelize').Op.ne]: null } }
+          ]
+        };
       }
     }
     
     if (eventId) {
       whereClause.eventId = eventId;
     }
+    
+    console.log('🔍 Query where clause:', JSON.stringify(whereClause, null, 2));
     
     const tickets = await Ticket.findAndCountAll({
       where: whereClause,
@@ -289,15 +307,21 @@ const getAllRefundRequests = async (req, res) => {
           attributes: ['id', 'name', 'startDate', 'refundDeadline', 'refundPolicy']
         },
         {
-          model: Order,
-          as: 'order',
-          attributes: ['id', 'customerName', 'customerEmail', 'customerPhone']
+          model: OrderItem,
+          as: 'orderItem',
+          include: [{
+            model: Order,
+            as: 'order',
+            attributes: ['id', 'customerName', 'customerEmail', 'customerPhone']
+          }]
         }
       ],
-      order: [['createdAt', 'DESC']],
+      order: [['updatedAt', 'DESC']], // Order by last updated to show recent refund requests first
       limit: parseInt(limit),
       offset: parseInt(offset)
     });
+    
+    console.log(`🔍 Found ${tickets.count} tickets in database`);
     
     // Process tickets to add refund status
     const processedTickets = tickets.rows.map(ticket => {
@@ -309,9 +333,26 @@ const getAllRefundRequests = async (req, res) => {
       if (ticket.status === 'refunded') {
         refundStatus = 'refunded';
       } else if (ticket.status === 'active' && refundCheck.canRefund) {
+        // If ticket is active and within refund deadline, it's allowed
+        // This includes both automatic refunds and approved manual requests
         refundStatus = 'allowed';
       } else if (ticket.status === 'active' && !refundCheck.canRefund) {
-        refundStatus = 'expired';
+        // If ticket is active but past refund deadline, check if it has a manual request
+        if (ticket.refundApprovedAt) {
+          refundStatus = 'allowed'; // Approved by admin, even if past deadline
+        } else if (ticket.refundRequestedAt || ticket.refundRequestReason) {
+          refundStatus = 'requested'; // Manual request pending approval
+        } else {
+          refundStatus = 'expired'; // No request, just expired
+        }
+      } else if (ticket.refundApprovedAt) {
+        // This ticket has an approved refund request
+        refundStatus = 'allowed';
+      } else if (ticket.refundRequestedAt || ticket.refundRequestReason) {
+        // This ticket has a manual refund request but is not active
+        refundStatus = 'requested';
+      } else if (!ticket.event?.refundTerms?.allowsRefunds) {
+        refundStatus = 'not_allowed';
       } else {
         refundStatus = ticket.status; // used, cancelled, etc.
       }
@@ -324,21 +365,34 @@ const getAllRefundRequests = async (req, res) => {
         status: ticket.status,
         refundStatus,
         canRefund: refundCheck.canRefund,
-        refundStatusReason: refundCheck.reason,
+        refundStatusReason: ticket.refundRequestReason || refundCheck.reason,
         refundedAt: ticket.refundedAt,
         refundedBy: ticket.refundedBy,
         refundReason: ticket.refundReason,
+        refundRequestedAt: ticket.refundRequestedAt,
+        refundPriority: ticket.refundPriority,
+        adminNotes: ticket.adminNotes,
         event: ticket.event,
-        order: ticket.order,
+        order: ticket.orderItem?.order, // Access order through orderItem
         createdAt: ticket.createdAt,
         updatedAt: ticket.updatedAt
       };
     });
     
+    console.log(`🔍 Processed ${processedTickets.length} tickets`);
+    console.log('🔍 Sample ticket data:', processedTickets[0] ? {
+      ticketCode: processedTickets[0].ticketCode,
+      status: processedTickets[0].status,
+      refundStatus: processedTickets[0].refundStatus,
+      refundRequestedAt: processedTickets[0].refundRequestedAt,
+      refundRequestReason: processedTickets[0].refundRequestReason
+    } : 'No tickets found');
+    
     // Filter by refund status if specified
     let filteredTickets = processedTickets;
-    if (status && ['allowed', 'expired'].includes(status)) {
+    if (status && ['allowed', 'expired', 'refunded', 'requested'].includes(status)) {
       filteredTickets = processedTickets.filter(ticket => ticket.refundStatus === status);
+      console.log(`🔍 Filtered to ${filteredTickets.length} tickets with status '${status}'`);
     }
     
     res.json({
@@ -353,7 +407,9 @@ const getAllRefundRequests = async (req, res) => {
         total: processedTickets.length,
         allowed: processedTickets.filter(t => t.refundStatus === 'allowed').length,
         expired: processedTickets.filter(t => t.refundStatus === 'expired').length,
-        refunded: processedTickets.filter(t => t.refundStatus === 'refunded').length
+        refunded: processedTickets.filter(t => t.refundStatus === 'refunded').length,
+        requested: processedTickets.filter(t => t.refundStatus === 'requested').length,
+        not_allowed: processedTickets.filter(t => t.refundStatus === 'not_allowed').length
       }
     });
     
@@ -379,7 +435,8 @@ const createManualRefundRequest = async (req, res) => {
       return res.status(400).json({ error: 'Ticket code and reason are required' });
     }
     
-    // Find the ticket
+
+    // Find the ticket with correct associations
     const ticket = await Ticket.findOne({
       where: { ticketCode },
       include: [
@@ -388,8 +445,12 @@ const createManualRefundRequest = async (req, res) => {
           as: 'event'
         },
         {
-          model: Order,
-          as: 'order'
+          model: OrderItem,
+          as: 'orderItem',
+          include: [{
+            model: Order,
+            as: 'order'
+          }]
         }
       ]
     });
@@ -398,8 +459,55 @@ const createManualRefundRequest = async (req, res) => {
       return res.status(404).json({ error: 'Ticket not found' });
     }
     
-    // Create a refund request record (we'll need to add this model)
-    // For now, we'll add notes to the ticket
+    // Check if event allows refunds
+    if (!ticket.event || !ticket.event.refundTerms || !ticket.event.refundTerms.allowsRefunds) {
+      return res.status(400).json({ 
+        error: 'Refunds are not allowed for this event',
+        eventName: ticket.event?.name || 'Unknown Event',
+        refundPolicy: ticket.event?.refundPolicy || 'No refund policy available'
+      });
+    }
+
+    // Check if refund deadline has passed
+    if (ticket.event.refundDeadline) {
+      const now = new Date();
+      const deadline = new Date(ticket.event.refundDeadline);
+      
+      if (now > deadline) {
+        return res.status(400).json({ 
+          error: 'Refund deadline has passed',
+          eventName: ticket.event.name,
+          refundDeadline: ticket.event.refundDeadline,
+          currentTime: now.toISOString(),
+          message: 'The refund deadline for this event has passed. Refunds are no longer available.'
+        });
+      }
+    }
+    
+    // Check if a refund request already exists for this ticket
+    if (ticket.refundRequestedAt || ticket.refundRequestReason) {
+      return res.status(400).json({ 
+        error: 'A refund request already exists for this ticket',
+        existingRequest: {
+          requestedAt: ticket.refundRequestedAt,
+          reason: ticket.refundRequestReason,
+          priority: ticket.refundPriority,
+          adminNotes: ticket.adminNotes
+        }
+      });
+    }
+    
+    // Check if ticket is already refunded
+    if (ticket.status === 'refunded') {
+      return res.status(400).json({ 
+        error: 'This ticket has already been refunded',
+        refundedAt: ticket.refundedAt,
+        refundedBy: ticket.refundedBy,
+        refundReason: ticket.refundReason
+      });
+    }
+    
+    // Create a refund request record by updating the ticket
     await ticket.update({
       adminNotes: adminNotes || `Manual refund request created by admin. Reason: ${reason}. Contact: ${contactMethod}. Customer notes: ${customerNotes}`,
       refundRequestedAt: new Date(),
@@ -415,7 +523,7 @@ const createManualRefundRequest = async (req, res) => {
         holderName: ticket.holderName,
         status: ticket.status,
         event: ticket.event,
-        order: ticket.order,
+        order: ticket.orderItem?.order, // Access order through orderItem
         refundRequestReason: reason,
         adminNotes: ticket.adminNotes
       }
@@ -424,6 +532,91 @@ const createManualRefundRequest = async (req, res) => {
   } catch (error) {
     console.error('Error creating manual refund request:', error);
     res.status(500).json({ error: 'Failed to create manual refund request' });
+  }
+};
+
+// Approve a refund request (admin action)
+const approveRefundRequest = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const { adminNotes } = req.body;
+    
+    const ticket = await Ticket.findByPk(ticketId, {
+      include: [
+        {
+          model: Event,
+          as: 'event'
+        },
+        {
+          model: OrderItem,
+          as: 'orderItem',
+          include: [{
+            model: Order,
+            as: 'order'
+          }]
+        }
+      ]
+    });
+    
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+    
+    // Check if ticket has a refund request
+    if (!ticket.refundRequestedAt && !ticket.refundRequestReason) {
+      return res.status(400).json({ error: 'No refund request found for this ticket' });
+    }
+    
+    // Update admin notes first
+    await ticket.update({
+      adminNotes: adminNotes ? `${ticket.adminNotes || ''}\nApproved: ${adminNotes}`.trim() : ticket.adminNotes,
+      refundApprovedAt: new Date(),
+      refundApprovedBy: req.user?.id || 'admin'
+    });
+
+    // Actually process the refund to update ticket count and revenue
+    try {
+      await ticket.processRefund(req.user?.id || 'admin', ticket.refundRequestReason);
+      
+      res.json({
+        message: 'Refund request approved and processed successfully',
+        ticket: {
+          id: ticket.id,
+          ticketCode: ticket.ticketCode,
+          holderName: ticket.holderName,
+          status: 'refunded', // Now it's actually refunded
+          refundStatus: 'refunded',
+          event: ticket.event,
+          order: ticket.orderItem?.order,
+          refundRequestReason: ticket.refundRequestReason,
+          refundedAt: ticket.refundedAt,
+          refundedBy: ticket.refundedBy,
+          adminNotes: ticket.adminNotes
+        }
+      });
+    } catch (refundError) {
+      // If refund processing fails, still mark as approved but note the error
+      console.error('Error processing approved refund:', refundError);
+      res.json({
+        message: 'Refund request approved but processing failed',
+        warning: refundError.message,
+        ticket: {
+          id: ticket.id,
+          ticketCode: ticket.ticketCode,
+          holderName: ticket.holderName,
+          status: ticket.status,
+          refundStatus: 'approved_but_failed',
+          event: ticket.event,
+          order: ticket.orderItem?.order,
+          refundRequestReason: ticket.refundRequestReason,
+          adminNotes: ticket.adminNotes
+        }
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error approving refund request:', error);
+    res.status(500).json({ error: 'Failed to approve refund request' });
   }
 };
 
@@ -450,6 +643,26 @@ const adminOverrideRefund = async (req, res) => {
       return res.status(404).json({ error: 'Ticket not found' });
     }
     
+    // Check if event allows refunds (admin override can bypass this)
+    if (!ticket.event || !ticket.event.refundTerms || !ticket.event.refundTerms.allowsRefunds) {
+      // Admin override can still process refunds even if event doesn't allow them
+      // This is intentional - admin override means bypassing normal restrictions
+      console.log(`Admin override refund for event that doesn't allow refunds: ${ticket.event?.name || 'Unknown'}`);
+    }
+    
+    // Get the order item to calculate refund amount
+    const orderItem = await ticket.getOrderItem({
+      include: [{
+        model: Order,
+        as: 'order'
+      }]
+    });
+
+    let refundAmountPerTicket = 0;
+    if (orderItem) {
+      refundAmountPerTicket = parseFloat(orderItem.unitPrice);
+    }
+
     // Admin override - process refund regardless of normal restrictions
     await ticket.update({
       status: 'refunded',
@@ -462,9 +675,31 @@ const adminOverrideRefund = async (req, res) => {
     });
     
     // Update event's available tickets count
-    const event = await ticket.getEvent();
+    const event = await Event.findByPk(ticket.eventId);
     if (event) {
       await event.increment('availableTickets');
+    }
+
+    // Update order's total amount to reflect refund
+    if (orderItem && orderItem.order && orderItem.order.status === 'paid') {
+      const order = orderItem.order;
+      const newTotalAmount = parseFloat(order.totalAmount) - refundAmountPerTicket;
+      await order.update({
+        totalAmount: Math.max(0, newTotalAmount) // Ensure it doesn't go negative
+      });
+
+      // Check if all tickets in the order are now refunded
+      const allTickets = await order.getTickets();
+      const allRefunded = allTickets.every(ticket => ticket.status === 'refunded');
+      
+      if (allRefunded) {
+        await order.update({
+          status: 'refunded',
+          refundedAt: new Date(),
+          refundedBy: adminId,
+          refundReason: reason || 'All tickets refunded via admin override'
+        });
+      }
     }
     
     res.json({
@@ -529,6 +764,7 @@ module.exports = {
   getRefundAnalytics,
   getAllRefundRequests,
   createManualRefundRequest,
+  approveRefundRequest,
   adminOverrideRefund,
   updateRefundRequest
 };

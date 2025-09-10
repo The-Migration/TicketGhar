@@ -12,12 +12,13 @@ const purchaseSessionReminderService = require('./services/purchaseSessionRemind
 const purchaseSessionExpiryService = require('./services/purchaseSessionExpiryService');
 const automaticQueueProcessor = require('./services/automaticQueueProcessor');
 const queueLimitChecker = require('./services/queueLimitChecker');
-require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Database initialization
+// -----------------------------
+// 🗄️ Database initialization
+// -----------------------------
 async function initializeDatabase() {
   try {
     await testConnection();
@@ -28,43 +29,14 @@ async function initializeDatabase() {
     process.exit(1);
   }
 }
-
-// Initialize database on startup
 initializeDatabase();
 
-// Start scheduled cleanup job
-startScheduledCleanup();
-
-// Start automatic queue processing for events with sale_started status
-async function startAutomaticQueueProcessing() {
-  try {
-    const { Event } = require('./models');
-    
-    // Find all events with sale_started status
-    const saleStartedEvents = await Event.findAll({
-      where: {
-        status: 'sale_started'
-      }
-    });
-    
-    console.log(`🎯 Found ${saleStartedEvents.length} events with sale_started status`);
-    
-    // Start automatic processing for each event
-    for (const event of saleStartedEvents) {
-      console.log(`🚀 Starting automatic queue processing for event: ${event.name} (${event.id})`);
-      await automaticQueueProcessor.startProcessingForEvent(event.id);
-    }
-    
-  } catch (error) {
-    console.error('❌ Error starting automatic queue processing:', error);
-  }
-}
-
-// Start scheduled cleanup job
+// -----------------------------
+// 🧹 Scheduled Cleanup
+// -----------------------------
 function startScheduledCleanup() {
   console.log('🧹 Starting scheduled cleanup job (runs every 5 minutes)');
-  
-  // Run cleanup every 5 minutes
+
   setInterval(async () => {
     try {
       console.log('🔄 Running scheduled cleanup...');
@@ -75,9 +47,8 @@ function startScheduledCleanup() {
     } catch (error) {
       console.error('❌ Error during scheduled cleanup:', error);
     }
-  }, 5 * 60 * 1000); // 5 minutes
-  
-  // Run initial cleanup on startup
+  }, 5 * 60 * 1000);
+
   setTimeout(async () => {
     try {
       console.log('🔄 Running initial cleanup on startup...');
@@ -88,10 +59,31 @@ function startScheduledCleanup() {
     } catch (error) {
       console.error('❌ Error during initial cleanup:', error);
     }
-  }, 10000); // 10 seconds after startup
+  }, 10000);
+}
+startScheduledCleanup();
+
+// -----------------------------
+// 🔄 Automatic Queue Processing
+// -----------------------------
+async function startAutomaticQueueProcessing() {
+  try {
+    const { Event } = require('./models');
+    const saleStartedEvents = await Event.findAll({ where: { status: 'sale_started' } });
+
+    console.log(`🎯 Found ${saleStartedEvents.length} events with sale_started status`);
+    for (const event of saleStartedEvents) {
+      console.log(`🚀 Starting automatic queue processing for event: ${event.name} (${event.id})`);
+      await automaticQueueProcessor.startProcessingForEvent(event.id);
+    }
+  } catch (error) {
+    console.error('❌ Error starting automatic queue processing:', error);
+  }
 }
 
-// Middleware
+// -----------------------------
+// 🧱 Middleware
+// -----------------------------
 app.use(helmet());
 app.use(compression());
 app.use(morgan('combined'));
@@ -103,7 +95,9 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Health check endpoint
+// -----------------------------
+// 🚨 API Health Endpoints
+// -----------------------------
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
@@ -114,7 +108,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Health check endpoint for Render
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
@@ -124,24 +117,25 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Root route
-app.get('/', (req, res) => {
-  res.json({
-    message: '🎫 TicketGhar API Server',
-    status: 'running',
-    version: '1.0.0',
-    endpoints: {
-      health: '/health',
-      api: '/api',
-      docs: 'API documentation available at /api'
-    }
-  });
-});
-
-// API routes
+// -----------------------------
+// 🧩 API Routes
+// -----------------------------
 app.use('/api', require('./routes'));
 
-// Error handling middleware
+// -----------------------------
+// ⚛️ React Static File Serving
+// -----------------------------
+const staticPath = path.join(__dirname, '../../frontend/build');
+app.use(express.static(staticPath));
+
+// Serve React app for any route not starting with /api
+app.get('*', (req, res) => {
+  res.sendFile(path.join(staticPath, 'index.html'));
+});
+
+// -----------------------------
+// ❌ Error Handling
+// -----------------------------
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
@@ -150,15 +144,9 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    error: 'Route not found',
-    path: req.originalUrl
-  });
-});
-
-// Graceful shutdown
+// -----------------------------
+// 🛑 Graceful Shutdown
+// -----------------------------
 process.on('SIGTERM', () => {
   console.log('🛑 SIGTERM received, shutting down gracefully');
   server.close(() => {
@@ -166,26 +154,25 @@ process.on('SIGTERM', () => {
   });
 });
 
-// Start server
+// -----------------------------
+// 🚀 Start Server
+// -----------------------------
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🔗 API available at http://localhost:${PORT}/api`);
   console.log(`❤️  Health check at http://localhost:${PORT}/health`);
-  
-  // Start notification services
+
   purchaseSessionReminderService.start();
   console.log('🔔 Purchase session reminder service started');
-  
+
   purchaseSessionExpiryService.start();
   console.log('⏰ Purchase session expiry service started');
-  
-  // Start automatic queue processing for events with sale_started status
+
   startAutomaticQueueProcessing();
   console.log('🔄 Automatic queue processing service started');
-  
-  // Start queue limit checker service
+
   queueLimitChecker.start();
   console.log('🚫 Queue limit checker service started');
 });
 
-module.exports = app; 
+module.exports = app;

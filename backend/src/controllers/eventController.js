@@ -4,6 +4,8 @@ const { Op } = require('sequelize');
 // Create new event with ticket types
 exports.createEvent = async (req, res) => {
   try {
+    console.log('Creating event with data:', JSON.stringify(req.body, null, 2));
+    
     // Check if user exists
     if (!req.user) {
       return res.status(401).json({ message: 'User not authenticated' });
@@ -25,7 +27,9 @@ exports.createEvent = async (req, res) => {
       currency,
       refundDeadline,
       refundPolicy,
-      refundTerms
+      refundTerms,
+      status,
+      concurrentUsers
     } = req.body;
 
     // Validate required fields
@@ -48,8 +52,8 @@ exports.createEvent = async (req, res) => {
       return res.status(400).json({ message: 'Event end time must be after start time' });
     }
 
-    // Only use image URL
-    const imageUrl = coverImageUrl;
+    // Only use image URL - convert empty string to null for validation
+    const imageUrl = coverImageUrl && coverImageUrl.trim() !== '' ? coverImageUrl : null;
 
     // Prepare event data
     const eventData = {
@@ -67,39 +71,46 @@ exports.createEvent = async (req, res) => {
       ticketPrice: ticketTypes && ticketTypes.length > 0 ? ticketTypes[0].price : 0,
       currency: currency || 'USD',
       maxTicketsPerUser: ticketTypes && ticketTypes.length > 0 ? ticketTypes[0].maxPerUser : 4,
+      concurrentUsers: concurrentUsers || 1,
       imageUrl: imageUrl,
       category,
       tags: tags || [],
       metadata: metadata || {},
-      refundDeadline: refundDeadline,
-      refundPolicy: refundPolicy,
-      refundTerms: refundTerms,
+      refundDeadline: refundDeadline && refundDeadline.trim() !== '' ? refundDeadline : null,
+      refundPolicy: refundPolicy && refundPolicy.trim() !== '' ? refundPolicy : null,
+      refundTerms: refundTerms && refundTerms.trim() !== '' ? refundTerms : null,
       createdById: req.user.id,
-      status: 'draft'
+      status: status || 'draft'
     };
 
     // Create event - using model field names
+    console.log('Creating event with data:', JSON.stringify(eventData, null, 2));
     const event = await Event.create(eventData);
+    console.log('Event created successfully:', event.id);
 
     // Create ticket types if provided
     if (ticketTypes && ticketTypes.length > 0) {
+      console.log('Creating ticket types:', JSON.stringify(ticketTypes, null, 2));
       const ticketTypePromises = ticketTypes.map((ticketType, index) => {
-        return TicketType.create({
+        const ticketTypeData = {
           eventId: event.id,
           name: ticketType.name,
           description: ticketType.description,
           price: ticketType.price,
           quantityTotal: ticketType.quantityTotal,
-          maxPerOrder: ticketType.maxPerOrder || 10,
+          maxPerOrder: ticketType.maxPerUser || 10, // Use maxPerUser from frontend
           maxPerUser: ticketType.maxPerUser || 10,
           saleStartTime: ticketType.saleStartTime,
           saleEndTime: ticketType.saleEndTime,
           sortOrder: index,
           status: 'active'
-        });
+        };
+        console.log(`Creating ticket type ${index}:`, JSON.stringify(ticketTypeData, null, 2));
+        return TicketType.create(ticketTypeData);
       });
 
       await Promise.all(ticketTypePromises);
+      console.log('All ticket types created successfully');
     }
 
     // Fetch complete event with ticket types
@@ -163,12 +174,12 @@ exports.getEvents = async (req, res) => {
       console.log('📊 Status filter explicitly set to:', status);
     } else {
       // If no status specified, filter based on user role
-      // Non-admin users should only see published events
+      // Non-admin users should only see active events (published and visible to users)
       if (!req.user || req.user.role !== 'admin') {
         where.status = {
-          [Op.in]: ['published', 'sale_started', 'sale_ended', 'completed']
+          [Op.in]: ['active', 'sale_started', 'sale_ended', 'completed']
         };
-        console.log('📊 Non-admin user: filtering to published events only');
+        console.log('📊 Non-admin user: filtering to active events only');
       } else {
         console.log('📊 Admin user: showing all events including drafts');
       }
@@ -178,7 +189,7 @@ exports.getEvents = async (req, res) => {
     // Additional safety check: if user explicitly requests draft events but is not admin
     if (status === 'draft' && (!req.user || req.user.role !== 'admin')) {
       where.status = {
-        [Op.in]: ['published', 'sale_started', 'sale_ended', 'completed']
+        [Op.in]: ['active', 'sale_started', 'sale_ended', 'completed']
       };
       console.log('📊 Non-admin tried to access draft events: blocked');
     }
@@ -186,7 +197,7 @@ exports.getEvents = async (req, res) => {
     // Filter out past events for non-admin users (events where both sale ended AND event date passed)
     if (!req.user || req.user.role !== 'admin') {
       const now = new Date();
-      // Add to existing where conditions instead of overwriting
+      // Combine existing conditions with date filtering using Op.and
       const existingConditions = Object.keys(where).length > 0 ? [where] : [];
       where = {
         [Op.and]: [
@@ -299,11 +310,6 @@ exports.getEventById = async (req, res) => {
         {
           model: User,
           as: 'creator',
-          attributes: ['id', 'email', 'firstName', 'lastName']
-        },
-        {
-          model: User,
-          as: 'organizer',
           attributes: ['id', 'email', 'firstName', 'lastName']
         },
         {
@@ -600,7 +606,7 @@ exports.publishEvent = async (req, res) => {
     }
 
     // Update status
-    await event.update({ status: 'published' });
+    await event.update({ status: 'active' });
 
     res.json({
       message: 'Event published successfully',
@@ -724,10 +730,7 @@ exports.getUserEvents = async (req, res) => {
 
     const offset = (page - 1) * limit;
     const where = {
-      [Op.or]: [
-        { createdById: userId },
-        { organizerId: userId }
-      ]
+      createdById: userId
     };
 
     if (status) {
@@ -776,7 +779,7 @@ exports.searchEvents = async (req, res) => {
     }
 
     const where = {
-      status: 'published',
+      status: 'active',
       [Op.or]: [
         { title: { [Op.iLike]: `%${query}%` } },
         { description: { [Op.iLike]: `%${query}%` } },
@@ -990,7 +993,6 @@ exports.getEventTicketTypeStatistics = async (req, res) => {
 
     // Check authorization
     if (event.createdById !== req.user.id && 
-        event.organizerId !== req.user.id && 
         req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Not authorized to view statistics' });
     }

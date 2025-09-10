@@ -584,7 +584,7 @@ exports.getAvailableTicketTypes = async (req, res) => {
       return res.status(404).json({ message: 'Event not found' });
     }
 
-    if (event.status !== 'published') {
+    if (event.status !== 'active') {
       return res.status(400).json({ message: 'Event is not available for purchase' });
     }
 

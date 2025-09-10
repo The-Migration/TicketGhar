@@ -10,6 +10,7 @@ const purchaseSessionRoutes = require('./purchaseSessionRoutes');
 const orderRoutes = require('./orderRoutes');
 const ticketRoutes = require('./ticketRoutes');
 const refundRoutes = require('./refundRoutes');
+const ticketScanRoutes = require('./ticketScanRoutes');
 
 const router = express.Router();
 
@@ -25,6 +26,7 @@ router.use('/purchase-sessions', purchaseSessionRoutes);
 router.use('/orders', orderRoutes);
 router.use('/tickets', ticketRoutes);
 router.use('/refunds', refundRoutes);
+router.use('/ticket-scan', ticketScanRoutes);
 
 // API info endpoint
 router.get('/', (req, res) => {

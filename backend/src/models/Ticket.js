@@ -96,12 +96,8 @@ module.exports = (sequelize) => {
       field: 'used_at'
     },
     usedBy: {
-      type: DataTypes.UUID,
+      type: DataTypes.STRING,
       allowNull: true,
-      references: {
-        model: 'users',
-        key: 'id'
-      },
       field: 'used_by'
     },
     usedLocation: {
@@ -221,6 +217,16 @@ module.exports = (sequelize) => {
       type: DataTypes.TEXT,
       allowNull: true,
       field: 'override_reason'
+    },
+    refundApprovedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'refund_approved_at'
+    },
+    refundApprovedBy: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'refund_approved_by'
     },
     // Security and verification
     securityCode: {
@@ -945,12 +951,21 @@ module.exports = (sequelize) => {
 
   // Add refund-related methods
   Ticket.prototype.canRefund = function() {
-    if (this.status !== 'active') {
+    if (this.status !== 'active' && this.status !== 'valid') {
       return { canRefund: false, reason: `Ticket is ${this.status}, cannot refund` };
     }
 
     const event = this.event;
-    if (!event || !event.refundDeadline) {
+    if (!event) {
+      return { canRefund: false, reason: 'Event not found' };
+    }
+
+    // Check if event allows refunds at all
+    if (!event.refundTerms || !event.refundTerms.allowsRefunds) {
+      return { canRefund: false, reason: 'Refunds are not allowed for this event' };
+    }
+
+    if (!event.refundDeadline) {
       return { canRefund: false, reason: 'No refund deadline set for this event' };
     }
 
@@ -970,6 +985,21 @@ module.exports = (sequelize) => {
       throw new Error(refundCheck.reason);
     }
 
+    // Get the order item to calculate refund amount
+    const orderItem = await this.getOrderItem({
+      include: [{
+        model: sequelize.models.Order,
+        as: 'order'
+      }]
+    });
+
+    if (!orderItem) {
+      throw new Error('Order item not found for ticket');
+    }
+
+    // Calculate refund amount per ticket
+    const refundAmountPerTicket = parseFloat(orderItem.unitPrice);
+
     // Update ticket status
     await this.update({
       status: 'refunded',
@@ -979,9 +1009,31 @@ module.exports = (sequelize) => {
     });
 
     // Update event's available tickets count
-    const event = await this.getEvent();
+    const event = await sequelize.models.Event.findByPk(this.eventId);
     if (event) {
       await event.increment('availableTickets');
+    }
+
+    // Update order's total amount to reflect refund
+    const order = orderItem.order;
+    if (order && order.status === 'paid') {
+      const newTotalAmount = parseFloat(order.totalAmount) - refundAmountPerTicket;
+      await order.update({
+        totalAmount: Math.max(0, newTotalAmount) // Ensure it doesn't go negative
+      });
+
+      // Check if all tickets in the order are now refunded
+      const allTickets = await order.getTickets();
+      const allRefunded = allTickets.every(ticket => ticket.status === 'refunded');
+      
+      if (allRefunded) {
+        await order.update({
+          status: 'refunded',
+          refundedAt: new Date(),
+          refundedBy: operatorId,
+          refundReason: reason || 'All tickets refunded'
+        });
+      }
     }
 
     return this;

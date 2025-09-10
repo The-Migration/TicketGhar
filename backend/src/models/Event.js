@@ -129,7 +129,7 @@ module.exports = (sequelize) => {
       field: 'concurrent_users'
     },
     status: {
-      type: DataTypes.ENUM('draft', 'published', 'sale_started', 'sale_ended', 'completed', 'cancelled'),
+      type: DataTypes.STRING(20),
       defaultValue: 'draft',
       allowNull: false
     },
@@ -150,12 +150,12 @@ module.exports = (sequelize) => {
     tags: {
       type: DataTypes.JSON,
       allowNull: true,
-      defaultValue: []
+      defaultValue: '[]'
     },
     metadata: {
       type: DataTypes.JSON,
       allowNull: true,
-      defaultValue: {}
+      defaultValue: '{}'
     },
     createdById: {
       type: DataTypes.UUID,
@@ -188,13 +188,7 @@ module.exports = (sequelize) => {
     refundTerms: {
       type: DataTypes.JSON,
       allowNull: true,
-      defaultValue: {
-        allowsRefunds: true,
-        refundPercentage: 100,
-        processingFee: 0,
-        requiresReason: false,
-        invalidatesTickets: true
-      },
+      defaultValue: '{"allowsRefunds":true,"refundPercentage":100,"processingFee":0,"requiresReason":false,"invalidatesTickets":true}',
       field: 'refund_terms'
     }
   }, {

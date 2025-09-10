@@ -6,11 +6,14 @@ const jwt = require('jsonwebtoken');
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 465,
-  secure: true,
+  port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 587,
+  secure: false, // Use TLS instead of SSL for port 587
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS
+  },
+  tls: {
+    rejectUnauthorized: false
   }
 });
 
@@ -43,38 +46,38 @@ function generateTicketPDF({ event, ticket }) {
     doc.moveDown();
       
       // Event details
-    doc.fontSize(16).text(`Event: ${event.name}`);
-    doc.text(`Venue: ${event.venue}`);
-    doc.text(`Date: ${event.startDate ? new Date(event.startDate).toLocaleString() : ''}`);
+    doc.fontSize(16).text(`Event: ${event?.name || event?.title || 'Unknown Event'}`);
+    doc.text(`Venue: ${event?.venue || event?.location || 'TBD'}`);
+    doc.text(`Date: ${event?.startDate ? new Date(event.startDate).toLocaleString() : 'TBD'}`);
     doc.moveDown();
       
       // Ticket details
-    doc.fontSize(14).text(`Ticket Code: ${ticket.ticketCode}`);
-    if (ticket.seatString) doc.text(`Seat: ${ticket.seatString}`);
-    doc.text(`Holder: ${ticket.holderName || ''}`);
-    doc.text(`Email: ${ticket.holderEmail || ''}`);
+    doc.fontSize(14).text(`Ticket Code: ${ticket?.ticketCode || ticket?.ticketNumber || 'N/A'}`);
+    if (ticket?.seatString) doc.text(`Seat: ${ticket.seatString}`);
+    doc.text(`Holder: ${ticket?.holderName || ticket?.customerName || 'N/A'}`);
+    doc.text(`Email: ${ticket?.holderEmail || ticket?.customerEmail || 'N/A'}`);
       
       // Use the same QR code generation as the ticket model for consistency
       // Use the same QR code token from the database for consistency
       // Ensure QR code exists
-      let signedToken = ticket.qrCodeToken;
+      let signedToken = ticket?.qrCodeToken;
       
       if (!signedToken) {
         // If no QR code token exists, generate one using the ticket code
         try {
           const { Ticket } = require('../models');
-          const ticketInstance = await Ticket.findByPk(ticket.id);
+          const ticketInstance = await Ticket.findByPk(ticket?.id);
           if (ticketInstance && typeof ticketInstance.generateQRCode === 'function') {
             await ticketInstance.generateQRCode();
             signedToken = ticketInstance.qrCodeToken;
           } else {
             // Fallback: use ticket code as QR data
-            signedToken = ticket.ticketCode;
+            signedToken = ticket?.ticketCode || ticket?.ticketNumber || 'DEFAULT';
           }
         } catch (error) {
           console.error('Error generating QR code for email PDF:', error);
           // Fallback: use ticket code as QR data
-          signedToken = ticket.ticketCode;
+          signedToken = ticket?.ticketCode || ticket?.ticketNumber || 'DEFAULT';
         }
       }
       
@@ -293,6 +296,89 @@ async function sendQueueErrorNotification(to, eventName, errorType, errorDetails
   await sendTicketEmail({ to, subject, html });
 }
 
+// Send ticket confirmation email with PDF attachments
+async function sendTicketConfirmationEmail({ to, customerName, order, tickets, event }) {
+  const subject = `🎫 Your tickets for ${event.name} - Order ${order.orderNumber}`;
+  
+  // Generate PDF attachments for each ticket
+  const attachments = [];
+  for (const ticket of tickets) {
+    try {
+      const pdfBuffer = await generateTicketPDF({ event, ticket });
+      attachments.push({
+        filename: `ticket-${ticket.ticketNumber}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf'
+      });
+    } catch (error) {
+      console.error('Error generating PDF for ticket:', ticket.id, error);
+    }
+  }
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #059669;">🎫 Your Tickets Are Ready!</h2>
+      <p>Hello ${customerName}!</p>
+      <p>Thank you for your purchase! Your tickets for <strong>${event.name}</strong> are attached to this email.</p>
+      
+      <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+        <h3 style="color: #374151; margin-top: 0;">Order Details</h3>
+        <p><strong>Order Number:</strong> ${order.orderNumber}</p>
+        <p><strong>Event:</strong> ${event.name}</p>
+        <p><strong>Date:</strong> ${new Date(event.startDate).toLocaleDateString()}</p>
+        <p><strong>Time:</strong> ${new Date(event.startDate).toLocaleTimeString()}</p>
+        <p><strong>Venue:</strong> ${event.venue}</p>
+        <p><strong>Total Amount:</strong> $${order.totalAmount}</p>
+        <p><strong>Number of Tickets:</strong> ${tickets.length}</p>
+      </div>
+
+      <div style="background-color: #dbeafe; padding: 20px; border-radius: 8px; margin: 20px 0;">
+        <h3 style="color: #1e40af; margin-top: 0;">📱 Important Information</h3>
+        <ul style="color: #1e40af;">
+          <li>Your tickets are attached as PDF files to this email</li>
+          <li>Save these tickets to your phone or print them</li>
+          <li>Present your ticket QR code at the event entrance</li>
+          <li>Each ticket is valid for one person only</li>
+        </ul>
+      </div>
+
+      <div style="background-color: #fef3c7; padding: 20px; border-radius: 8px; margin: 20px 0;">
+        <h3 style="color: #92400e; margin-top: 0;">⚠️ Event Reminders</h3>
+        <ul style="color: #92400e;">
+          <li>Arrive at least 30 minutes before the event starts</li>
+          <li>Bring a valid ID that matches the name on your ticket</li>
+          <li>Check the event page for any last-minute updates</li>
+        </ul>
+      </div>
+      
+      <p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/my-tickets" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">View My Tickets</a></p>
+      
+      <p style="color: #6b7280; font-size: 14px;">If you have any questions, please contact our support team.</p>
+      <p style="color: #6b7280; font-size: 14px;">Enjoy your event!</p>
+    </div>
+  `;
+
+  const text = `
+    Your tickets for ${event.name} are ready!
+    
+    Order Number: ${order.orderNumber}
+    Event: ${event.name}
+    Date: ${new Date(event.startDate).toLocaleDateString()}
+    Time: ${new Date(event.startDate).toLocaleTimeString()}
+    Venue: ${event.venue}
+    Total Amount: $${order.totalAmount}
+    Number of Tickets: ${tickets.length}
+    
+    Your tickets are attached as PDF files to this email.
+    Save these tickets to your phone or print them.
+    Present your ticket QR code at the event entrance.
+    
+    View your tickets online: ${process.env.FRONTEND_URL || 'http://localhost:3000'}/my-tickets
+  `;
+
+  await sendTicketEmail({ to, subject, text, html, attachments });
+}
+
 module.exports = { 
   sendTicketEmail, 
   generateTicketPDF, 
@@ -302,5 +388,6 @@ module.exports = {
   sendSessionExpiredNotification,
   sendQueueProcessingNotification,
   sendQueueErrorNotification,
-  sendQueueJoinedNotification
+  sendQueueJoinedNotification,
+  sendTicketConfirmationEmail
 }; 
