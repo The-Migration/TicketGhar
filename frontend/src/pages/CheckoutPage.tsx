@@ -25,6 +25,9 @@ const CheckoutPage: React.FC = () => {
   const [selectedTickets, setSelectedTickets] = useState<TicketSelection[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [step, setStep] = useState(1); // 1: Select tickets, 2: Payment
+  const [limitMessage, setLimitMessage] = useState<string | null>(null);
+  const [userTicketAllowance, setUserTicketAllowance] = useState<{[key: string]: number}>({});
+  const [isLoadingAllowance, setIsLoadingAllowance] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -34,6 +37,7 @@ const CheckoutPage: React.FC = () => {
 
     if (eventId) {
       fetchEvent(eventId);
+      fetchUserTicketAllowance(); // Fetch user's ticket allowance
       
       // Check if user has a valid purchase session (from queue)
       const purchaseSessionId = localStorage.getItem(`purchaseSession_${eventId}`);
@@ -70,6 +74,29 @@ const CheckoutPage: React.FC = () => {
   };
 
   const handleTicketQuantityChange = (ticketTypeId: string, quantity: number) => {
+    const ticketType = currentEvent?.ticketTypes?.find(t => t.id === ticketTypeId);
+    const maxPerUser = ticketType?.maxPerUser || 10;
+    const remainingAllowance = userTicketAllowance[ticketTypeId] || maxPerUser;
+    
+    // Clear any previous limit message
+    setLimitMessage(null);
+    
+    // Check if user has already reached their limit
+    if (remainingAllowance === 0) {
+      setLimitMessage(`You have already reached the maximum limit of ${maxPerUser} tickets for ${ticketType?.name || 'this ticket type'}. You cannot purchase more tickets.`);
+      // Auto-clear message after 5 seconds
+      setTimeout(() => setLimitMessage(null), 5000);
+      return; // Don't update the quantity
+    }
+    
+    // Check if quantity exceeds the remaining allowance
+    if (quantity > remainingAllowance) {
+      setLimitMessage(`You can only purchase ${remainingAllowance} more ticket${remainingAllowance === 1 ? '' : 's'} for ${ticketType?.name || 'this ticket type'}. You have already purchased ${maxPerUser - remainingAllowance} ticket${(maxPerUser - remainingAllowance) === 1 ? '' : 's'}.`);
+      // Auto-clear message after 4 seconds
+      setTimeout(() => setLimitMessage(null), 4000);
+      return; // Don't update the quantity
+    }
+    
     setSelectedTickets(prev => {
       const existing = prev.find(t => t.ticketTypeId === ticketTypeId);
       if (existing) {
@@ -80,7 +107,6 @@ const CheckoutPage: React.FC = () => {
           t.ticketTypeId === ticketTypeId ? { ...t, quantity } : t
         );
       } else if (quantity > 0) {
-        const ticketType = currentEvent?.ticketTypes?.find(t => t.id === ticketTypeId);
         if (ticketType) {
           return [...prev, {
             ticketTypeId,
@@ -97,6 +123,34 @@ const CheckoutPage: React.FC = () => {
 
   const getTotalPrice = () => {
     return selectedTickets.reduce((total, ticket) => total + (ticket.price * ticket.quantity), 0);
+  };
+
+  const fetchUserTicketAllowance = async () => {
+    if (!eventId || !isAuthenticated) return;
+    
+    setIsLoadingAllowance(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/events/${eventId}/user-allowance`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const allowanceMap: {[key: string]: number} = {};
+        data.ticketAllowance?.forEach((allowance: any) => {
+          allowanceMap[allowance.id] = allowance.remainingAllowance;
+        });
+        setUserTicketAllowance(allowanceMap);
+      }
+    } catch (error) {
+      console.error('Failed to fetch ticket allowance:', error);
+    } finally {
+      setIsLoadingAllowance(false);
+    }
   };
 
   const handleProceedToPayment = () => {
@@ -224,6 +278,31 @@ const CheckoutPage: React.FC = () => {
           <div className="bg-gray-800 rounded-lg p-6">
             <h2 className="text-2xl font-bold text-white mb-6">Select Your Tickets</h2>
             
+            {/* Overall limit reached message */}
+            {Object.values(userTicketAllowance).every(allowance => allowance === 0) && (
+              <div className="mb-6 p-4 bg-red-900 border border-red-600 rounded-lg">
+                <div className="flex items-center">
+                  <svg className="w-5 h-5 text-red-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                  <div>
+                    <p className="text-red-200 font-semibold">Purchase Limit Reached</p>
+                    <p className="text-red-300 text-sm">You have already reached the maximum ticket purchase limit for this event. You cannot purchase more tickets.</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Loading indicator */}
+            {isLoadingAllowance && (
+              <div className="mb-6 p-4 bg-gray-700 rounded-lg">
+                <div className="flex items-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-400 mr-2"></div>
+                  <p className="text-gray-300 text-sm">Checking your ticket allowance...</p>
+                </div>
+              </div>
+            )}
+            
             <div className="space-y-4">
               {currentEvent.ticketTypes?.map((ticketType) => (
                 <div key={ticketType.id} className="border border-gray-700 rounded-lg p-4">
@@ -233,6 +312,12 @@ const CheckoutPage: React.FC = () => {
                       <p className="text-gray-400 text-sm">{ticketType.description}</p>
                       <p className="text-indigo-400 font-bold text-lg">
                         {currentEvent.currency || 'PKR'} {ticketType.price}
+                      </p>
+                      <p className="text-gray-500 text-xs mt-1">
+                        {ticketType.id && userTicketAllowance[ticketType.id] !== undefined 
+                          ? `${userTicketAllowance[ticketType.id]} remaining (${(ticketType.maxPerUser || 10) - userTicketAllowance[ticketType.id]} already purchased)`
+                          : `Maximum ${ticketType.maxPerUser || 10} tickets per user`
+                        }
                       </p>
                     </div>
                     <div className="flex items-center space-x-2">
@@ -256,13 +341,15 @@ const CheckoutPage: React.FC = () => {
                         onClick={() => {
                           if (ticketType.id) {
                             const current = selectedTickets.find(t => t.ticketTypeId === ticketType.id)?.quantity || 0;
-                            const maxPerUser = ticketType.maxPerUser || 10;
-                            if (current < maxPerUser) {
-                              handleTicketQuantityChange(ticketType.id, current + 1);
-                            }
+                            handleTicketQuantityChange(ticketType.id, current + 1);
                           }
                         }}
-                        className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-700"
+                        disabled={!ticketType.id || userTicketAllowance[ticketType.id] === 0 || (selectedTickets.find(t => t.ticketTypeId === ticketType.id)?.quantity || 0) >= (userTicketAllowance[ticketType.id] || ticketType.maxPerUser || 10)}
+                        className={`w-8 h-8 rounded-full text-white flex items-center justify-center ${
+                          !ticketType.id || userTicketAllowance[ticketType.id] === 0 || (selectedTickets.find(t => t.ticketTypeId === ticketType.id)?.quantity || 0) >= (userTicketAllowance[ticketType.id] || ticketType.maxPerUser || 10)
+                            ? 'bg-gray-600 cursor-not-allowed opacity-50'
+                            : 'bg-indigo-600 hover:bg-indigo-700'
+                        }`}
                       >
                         +
                       </button>
@@ -272,13 +359,30 @@ const CheckoutPage: React.FC = () => {
               ))}
             </div>
 
+            {/* Limit Message */}
+            {limitMessage && (
+              <div className="mt-4 p-4 bg-yellow-900 border border-yellow-600 rounded-lg">
+                <div className="flex items-center">
+                  <svg className="w-5 h-5 text-yellow-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  <p className="text-yellow-200 text-sm">{limitMessage}</p>
+                </div>
+              </div>
+            )}
+
             {selectedTickets.length > 0 && (
               <div className="mt-6 pt-6 border-t border-gray-700">
                 <div className="flex justify-between items-center">
                   <span className="text-lg font-semibold text-white">Total: {currentEvent.currency || 'PKR'} {getTotalPrice()}</span>
                   <button
                     onClick={handleProceedToPayment}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-300"
+                    disabled={Object.values(userTicketAllowance).every(allowance => allowance === 0)}
+                    className={`font-bold py-3 px-6 rounded-lg transition-colors duration-300 ${
+                      Object.values(userTicketAllowance).every(allowance => allowance === 0)
+                        ? 'bg-gray-600 cursor-not-allowed opacity-50 text-gray-400'
+                        : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                    }`}
                   >
                     Proceed to Payment
                   </button>
