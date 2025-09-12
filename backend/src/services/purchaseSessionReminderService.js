@@ -4,7 +4,7 @@ const { Op } = require('sequelize');
 
 class PurchaseSessionReminderService {
   constructor() {
-    this.reminderIntervals = [5, 2, 1]; // Send reminders at 5, 2, and 1 minutes remaining
+    this.reminderIntervals = [5]; // Send reminder after 3 minutes (at 5 minutes remaining out of 8 total)
     this.processingInterval = null;
   }
 
@@ -83,6 +83,21 @@ class PurchaseSessionReminderService {
       );
 
       if (reminderAlreadySent) {
+        return;
+      }
+
+      // Check if user has already purchased tickets for this event
+      const { Order } = require('../models');
+      const existingOrder = await Order.findOne({
+        where: {
+          userId: session.userId,
+          eventId: session.queueEntry.eventId,
+          status: { [Op.in]: ['confirmed', 'paid'] }
+        }
+      });
+
+      if (existingOrder) {
+        console.log(`⏭️  Skipping reminder for session ${session.id} - user already purchased tickets for event ${session.queueEntry.eventId}`);
         return;
       }
 

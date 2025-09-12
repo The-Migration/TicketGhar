@@ -76,6 +76,12 @@ export const QueueProvider: React.FC<QueueProviderProps> = ({ children }) => {
         await fetchQueueStatus(eventId);
       } else {
         const errorData = await response.json();
+        
+        // Handle specific error types with user-friendly messages
+        if (errorData.errorType === 'PURCHASE_LIMIT_REACHED') {
+          throw new Error('You have already reached the maximum ticket purchase limit for this event. You cannot purchase more tickets as you have reached the limit set by the admin.');
+        }
+        
         throw new Error(errorData.message || 'Failed to join queue');
       }
     } catch (err) {

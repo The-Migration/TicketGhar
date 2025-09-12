@@ -38,21 +38,52 @@ const MyTicketsPage: React.FC = () => {
       return [];
     }
     
-    return orders.flatMap(order => 
-      (order.orderItems || order.tickets || []).map((item: any) => ({
-        id: `${order.id}-${item.id}`,
-        eventId: order.eventId,
-        eventName: order.event?.name || order.event?.title || 'Unknown Event',
-        eventImage: order.event?.imageUrl || 'https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?auto=format&fit=crop&w=1000&q=80',
-        eventDate: order.event?.startDate || order.event?.date || new Date().toISOString(),
-        eventVenue: order.event?.venue || order.event?.address || order.event?.location || 'Unknown Venue',
-        ticketType: item.ticketType?.name || 'General Admission',
-        quantity: item.quantity,
-        price: item.price || item.totalPrice || 0,
-        currency: order.currency || 'PKR',
-        status: new Date(order.event?.startDate || order.event?.date || new Date()) > new Date() ? 'upcoming' : 'past'
-      }))
-    );
+    const allTickets: Ticket[] = [];
+    
+    orders.forEach(order => {
+      // Check if order has orderItems with tickets
+      if (order.orderItems && Array.isArray(order.orderItems)) {
+        order.orderItems.forEach(orderItem => {
+          // Each orderItem represents a ticket type purchase
+          // Create one ticket entry per orderItem (not per individual ticket)
+          allTickets.push({
+            id: `${order.id}-${orderItem.id}`,
+            eventId: order.eventId,
+            eventName: order.event?.name || order.event?.title || 'Unknown Event',
+            eventImage: order.event?.imageUrl || 'https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?auto=format&fit=crop&w=1000&q=80',
+            eventDate: order.event?.startDate || order.event?.date || new Date().toISOString(),
+            eventVenue: order.event?.venue || order.event?.address || order.event?.location || 'Unknown Venue',
+            ticketType: orderItem.ticketType?.name || 'General Admission',
+            quantity: orderItem.quantity || 1,
+            price: orderItem.price || orderItem.totalPrice || 0,
+            currency: order.event?.currency || 'PKR',
+            status: new Date(order.event?.startDate || order.event?.date || new Date()) > new Date() ? 'upcoming' : 'past'
+          });
+        });
+      }
+      
+      // Also check for direct tickets array (fallback)
+      if (order.tickets && Array.isArray(order.tickets) && order.tickets.length > 0) {
+        order.tickets.forEach(ticket => {
+          allTickets.push({
+            id: `${order.id}-${ticket.id}`,
+            eventId: order.eventId,
+            eventName: order.event?.name || order.event?.title || 'Unknown Event',
+            eventImage: order.event?.imageUrl || 'https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?auto=format&fit=crop&w=1000&q=80',
+            eventDate: order.event?.startDate || order.event?.date || new Date().toISOString(),
+            eventVenue: order.event?.venue || order.event?.address || order.event?.location || 'Unknown Venue',
+            ticketType: ticket.ticketType?.name || 'General Admission',
+            quantity: 1,
+            price: ticket.ticketType?.price || ticket.totalPrice || 0,
+            currency: order.event?.currency || 'PKR',
+            status: new Date(order.event?.startDate || order.event?.date || new Date()) > new Date() ? 'upcoming' : 'past'
+          });
+        });
+      }
+    });
+    
+    console.log('MyTicketsPage: Generated tickets:', allTickets);
+    return allTickets;
   }, [orders]);
 
   const upcomingTickets = tickets.filter(ticket => ticket.status === 'upcoming');

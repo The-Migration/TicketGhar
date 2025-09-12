@@ -47,6 +47,19 @@ exports.joinQueue = async (req, res) => {
 
     console.log(`✅ Event ${eventId} has ${availableTicketTypes.length} available ticket types`);
 
+    // Check if user has already reached their purchase limits for all ticket types
+    if (userId) {
+      const hasReachedAllLimits = await TicketType.hasUserReachedAllEventLimits(eventId, userId);
+      if (hasReachedAllLimits) {
+        await transaction.rollback();
+        return res.status(400).json({
+          message: 'You have already reached the maximum ticket purchase limit for this event',
+          errorType: 'PURCHASE_LIMIT_REACHED',
+          details: 'You cannot purchase more tickets as you have reached the limit set by the admin'
+        });
+      }
+    }
+
     // Check if sale has started
     const now = new Date();
     const saleStart = new Date(event.ticketSaleStartTime);
@@ -129,6 +142,23 @@ exports.joinQueue = async (req, res) => {
     }, { transaction });
 
     console.log(`✅ User ${userId} joined queue for event ${eventId} at position ${nextPosition}`);
+
+    // Send queue joined email notification
+    try {
+      const emailService = require('../services/emailService');
+      const user = await User.findByPk(userId);
+      if (user && event) {
+        await emailService.sendQueueJoinedNotification(
+          user.email,
+          event.name,
+          queueEntry.position,
+          Math.ceil(queueEntry.position / (event.concurrentUsers || 1))
+        );
+      }
+    } catch (emailError) {
+      console.error('❌ Error sending queue joined email:', emailError);
+      // Don't fail the request if email fails
+    }
 
     await transaction.commit();
 

@@ -10,10 +10,11 @@ interface Order {
     name?: string;
     date: string;
     startDate?: string;
-    location: string;
+    location?: string;
     venue?: string;
     address?: string;
     imageUrl?: string;
+    currency?: string;
   };
   orderItems?: Array<{
     id: string;
@@ -25,6 +26,7 @@ interface Order {
     };
     quantity: number;
     price: number;
+    unitPrice?: number;
     totalPrice?: number;
     tickets?: Array<{
       id: string;
@@ -50,6 +52,9 @@ interface Order {
     totalPrice: number;
   }>;
   totalAmount: number;
+  taxAmount?: number;
+  serviceFee?: number;
+  processingFee?: number;
   currency?: string;
   status: 'pending' | 'confirmed' | 'cancelled' | 'refunded';
   paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded';

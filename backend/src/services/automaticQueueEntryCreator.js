@@ -101,9 +101,9 @@ class AutomaticQueueEntryCreator {
           const emailService = require('./emailService');
           await emailService.sendQueueJoinedNotification(
             user.email,
-            user.firstName || 'User',
-            eventId,
-            queueEntry.position
+            event.name,
+            queueEntry.position,
+            Math.ceil(queueEntry.position / (event.concurrentUsers || 1))
           );
         } catch (notificationError) {
           console.error(`❌ Error sending queue joined email notification:`, notificationError);

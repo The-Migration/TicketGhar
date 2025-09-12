@@ -128,12 +128,46 @@ const UserDashboard: React.FC = () => {
                             }
                           </p>
                           <p className="text-sm text-gray-400">
-                            {order.tickets.length} ticket{order.tickets.length !== 1 ? 's' : ''}
+                            {(() => {
+                              // Count tickets from orderItems
+                              let ticketCount = 0;
+                              if (order.orderItems && Array.isArray(order.orderItems)) {
+                                order.orderItems.forEach(item => {
+                                  if (item.tickets && Array.isArray(item.tickets)) {
+                                    ticketCount += item.tickets.length;
+                                  } else {
+                                    // If no individual tickets, count by quantity
+                                    ticketCount += item.quantity || 1;
+                                  }
+                                });
+                              } else if (order.tickets && Array.isArray(order.tickets)) {
+                                ticketCount = order.tickets.length;
+                              }
+                              return `${ticketCount} ticket${ticketCount !== 1 ? 's' : ''}`;
+                            })()}
                           </p>
                         </div>
                         <div className="text-right">
                           <p className="text-lg font-semibold text-white">
-                            PKR {(typeof order.totalAmount === 'number' ? order.totalAmount : parseFloat(order.totalAmount) || 0).toFixed(2)}
+                            {order.event?.currency || 'PKR'} {(() => {
+                              // Calculate subtotal from order items (base price without taxes/fees)
+                              let subtotal = 0;
+                              if (order.orderItems && Array.isArray(order.orderItems)) {
+                                order.orderItems.forEach(item => {
+                                  // Use unitPrice * quantity or totalPrice if available
+                                  const itemTotal = item.totalPrice || (item.unitPrice || 0) * (item.quantity || 1);
+                                  // Ensure itemTotal is a number
+                                  const numericTotal = typeof itemTotal === 'number' ? itemTotal : parseFloat(itemTotal) || 0;
+                                  subtotal += numericTotal;
+                                });
+                              } else {
+                                // Fallback to total amount if no order items
+                                subtotal = typeof order.totalAmount === 'number' ? order.totalAmount : parseFloat(order.totalAmount) || 0;
+                              }
+                              // Ensure subtotal is a number before calling toFixed
+                              const numericSubtotal = typeof subtotal === 'number' ? subtotal : parseFloat(subtotal) || 0;
+                              return numericSubtotal.toFixed(2);
+                            })()}
                           </p>
                           <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
                             order.status === 'confirmed' 

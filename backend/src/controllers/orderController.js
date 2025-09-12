@@ -152,7 +152,9 @@ exports.createOrder = async (req, res) => {
             if (!canPurchase.allowed) {
               return res.status(400).json({
                 message: canPurchase.reason,
-                ticketType: ticketType.name
+                ticketType: ticketType.name,
+                errorType: 'PURCHASE_LIMIT_EXCEEDED',
+                details: `You cannot purchase more than ${ticketType.maxPerUser} tickets of type "${ticketType.name}" as set by the admin`
               });
             }
           } catch (error) {
@@ -254,9 +256,8 @@ exports.createOrder = async (req, res) => {
         status: orderStatus,
         paymentStatus: paymentStatus,
         totalAmount,
-        subtotalAmount,
         taxAmount,
-        feeAmount,
+        processingFee: feeAmount, // Map feeAmount to processingFee field
         commissionAmount: 0.00, // Required field with default value
         discountAmount: validatedItems.reduce((sum, item) => sum + item.discountAmount, 0),
         currency: event.currency || 'USD',
