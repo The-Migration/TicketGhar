@@ -59,8 +59,12 @@ export const getTimeRemainingString = (deadline: string | Date): string => {
   }
 };
 
-export const formatEventDate = (date: string | Date, timezone: string = 'UTC'): string => {
+export const formatEventDate = (date: string | Date | null | undefined, timezone: string = 'UTC'): string => {
   try {
+    if (!date) {
+      return 'Date not available';
+    }
+    
     const dateObj = typeof date === 'string' ? new Date(date) : date;
 
     if (isNaN(dateObj.getTime())) {
@@ -83,8 +87,12 @@ export const formatEventDate = (date: string | Date, timezone: string = 'UTC'): 
   }
 };
 
-export const formatEventTime = (date: string | Date, timezone: string = 'UTC'): string => {
+export const formatEventTime = (date: string | Date | null | undefined, timezone: string = 'UTC'): string => {
   try {
+    if (!date) {
+      return 'Time not available';
+    }
+    
     const dateObj = typeof date === 'string' ? new Date(date) : date;
 
     if (isNaN(dateObj.getTime())) {

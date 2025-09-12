@@ -69,6 +69,11 @@ const OrderTicketsPage: React.FC = () => {
     );
   }
 
+  // Debug: Log the current order data
+  console.log('OrderTicketsPage: currentOrder data:', currentOrder);
+  console.log('OrderTicketsPage: currentOrder.tickets:', currentOrder.tickets);
+  console.log('OrderTicketsPage: currentOrder.orderItems:', currentOrder.orderItems);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -96,7 +101,10 @@ const OrderTicketsPage: React.FC = () => {
                 <div>
                   <h3 className="text-lg font-medium text-gray-900">{currentOrder.event?.title || 'Event Title'}</h3>
                   <p className="text-gray-600">
-                    {currentOrder.event?.date ? formatEventDate(currentOrder.event.date) : 'Date TBD'} at {currentOrder.event?.date ? formatEventTime(currentOrder.event.date) : 'Time TBD'}
+                    {currentOrder.event?.startDate || currentOrder.event?.date ? 
+                      `${formatEventDate(currentOrder.event.startDate || currentOrder.event.date)} at ${formatEventTime(currentOrder.event.startDate || currentOrder.event.date)}` : 
+                      'Date TBD'
+                    }
                   </p>
                   <p className="text-gray-600">{currentOrder.event?.location || 'Location TBD'}</p>
                 </div>
@@ -107,30 +115,52 @@ const OrderTicketsPage: React.FC = () => {
             <div className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-xl font-semibold text-gray-900 mb-4">Ticket Details</h2>
               <div className="space-y-4">
-                {currentOrder.tickets && currentOrder.tickets.length > 0 ? (
-                  currentOrder.tickets.map((ticket, index) => (
-                    <div key={index} className="border border-gray-200 rounded-lg p-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="font-medium text-gray-900">{ticket.ticketType?.name || 'Ticket Type'}</h3>
-                          <p className="text-sm text-gray-600">Quantity: {ticket.quantity || 1}</p>
+                {(() => {
+                  // Get tickets from either currentOrder.tickets or currentOrder.orderItems[].tickets
+                  const allTickets = [];
+                  if (currentOrder.tickets && currentOrder.tickets.length > 0) {
+                    allTickets.push(...currentOrder.tickets);
+                  }
+                  if (currentOrder.orderItems && currentOrder.orderItems.length > 0) {
+                    currentOrder.orderItems.forEach(item => {
+                      if (item.tickets && item.tickets.length > 0) {
+                        allTickets.push(...item.tickets);
+                      }
+                    });
+                  }
+                  
+                  return allTickets.length > 0 ? (
+                    allTickets.map((ticket, index) => {
+                      // Find the order item that contains this ticket to get the ticket type info
+                      const orderItem = currentOrder.orderItems?.find(item => 
+                        item.tickets?.some(t => t.id === ticket.id)
+                      );
+                      
+                      return (
+                        <div key={index} className="border border-gray-200 rounded-lg p-4">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <h3 className="font-medium text-gray-900">{orderItem?.ticketType?.name || 'Ticket Type'}</h3>
+                              <p className="text-sm text-gray-600">Quantity: {orderItem?.quantity || 1}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-semibold text-gray-900">
+                                ${orderItem?.totalPrice ? (typeof orderItem.totalPrice === 'number' ? orderItem.totalPrice.toFixed(2) : parseFloat(orderItem.totalPrice || '0').toFixed(2)) : '0.00'}
+                              </p>
+                              <p className="text-sm text-gray-600">
+                                ${orderItem?.price ? (typeof orderItem.price === 'number' ? orderItem.price.toFixed(2) : parseFloat(orderItem.price || '0').toFixed(2)) : '0.00'} each
+                              </p>
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-semibold text-gray-900">
-                            ${ticket.totalPrice ? ticket.totalPrice.toFixed(2) : '0.00'}
-                          </p>
-                          <p className="text-sm text-gray-600">
-                            ${ticket.ticketType?.price ? ticket.ticketType.price.toFixed(2) : '0.00'} each
-                          </p>
-                        </div>
-                      </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      <p>No tickets found for this order.</p>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    <p>No tickets found for this order.</p>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             </div>
 
@@ -180,7 +210,7 @@ const OrderTicketsPage: React.FC = () => {
               <div className="space-y-3 mb-6">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Subtotal</span>
-                  <span className="text-gray-900">${currentOrder.totalAmount ? currentOrder.totalAmount.toFixed(2) : '0.00'}</span>
+                  <span className="text-gray-900">${currentOrder.totalAmount ? (typeof currentOrder.totalAmount === 'number' ? currentOrder.totalAmount.toFixed(2) : parseFloat(currentOrder.totalAmount || '0').toFixed(2)) : '0.00'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Service Fee</span>
@@ -194,7 +224,7 @@ const OrderTicketsPage: React.FC = () => {
                   <div className="flex justify-between">
                     <span className="text-lg font-semibold text-gray-900">Total</span>
                     <span className="text-lg font-semibold text-gray-900">
-                      ${currentOrder.totalAmount ? currentOrder.totalAmount.toFixed(2) : '0.00'}
+                      ${currentOrder.totalAmount ? (typeof currentOrder.totalAmount === 'number' ? currentOrder.totalAmount.toFixed(2) : parseFloat(currentOrder.totalAmount || '0').toFixed(2)) : '0.00'}
                     </span>
                   </div>
                 </div>

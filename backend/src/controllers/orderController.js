@@ -225,10 +225,12 @@ exports.createOrder = async (req, res) => {
     const totalAmount = subtotalAmount + taxAmount + feeAmount;
 
     // Determine order status based on session type
-    const isDummySession = purchaseSessionId && purchaseSessionId.startsWith('session_');
-    const orderStatus = isDummySession ? 'paid' : 'pending';
+    // For dummy payments, we'll detect them by checking if paymentMethod is 'dummy', if no purchaseSessionId is provided, or if it's a dummy session ID
+    const isDummySession = !purchaseSessionId || paymentMethod === 'dummy' || (purchaseSessionId && purchaseSessionId.startsWith('session_'));
+    const orderStatus = isDummySession ? 'confirmed' : 'pending';
+    const paymentStatus = isDummySession ? 'paid' : 'pending';
     
-    console.log(`🎫 Creating order with status: ${orderStatus} (dummy session: ${isDummySession})`);
+    console.log(`🎫 Creating order with status: ${orderStatus}, paymentStatus: ${paymentStatus} (dummy session: ${isDummySession})`);
 
     // Create order
     let order;
@@ -247,13 +249,15 @@ exports.createOrder = async (req, res) => {
       order = await Order.create({
         userId: req.user?.id || null, // Allow null for unauthenticated users
         eventId,
-        purchaseSessionId,
+        purchaseSessionId: isDummySession ? null : purchaseSessionId, // Set to null for dummy sessions to avoid UUID validation error
         orderNumber: 'TG' + Date.now() + Math.random().toString(36).substr(2, 5).toUpperCase(), // Simple order number generation
         status: orderStatus,
+        paymentStatus: paymentStatus,
         totalAmount,
         subtotalAmount,
         taxAmount,
         feeAmount,
+        commissionAmount: 0.00, // Required field with default value
         discountAmount: validatedItems.reduce((sum, item) => sum + item.discountAmount, 0),
         currency: event.currency || 'USD',
         paymentMethod: paymentMethod || 'dummy',
@@ -261,7 +265,11 @@ exports.createOrder = async (req, res) => {
         customerName,
         customerEmail,
         customerPhone,
-        orderDate: new Date()
+        orderDate: new Date(),
+        // For dummy payments, explicitly set expiresAt to null to prevent cancellation
+        expiresAt: isDummySession ? null : undefined,
+        // For dummy payments, set completedAt since they are treated as completed payments
+        completedAt: isDummySession ? new Date() : undefined
       });
 
       console.log('✅ Order created successfully:', order.id, 'Status:', order.status);
@@ -309,22 +317,25 @@ exports.createOrder = async (req, res) => {
         const generatedTickets = await order.generateTickets();
         console.log('✅ Tickets generated successfully for dummy session order:', generatedTickets?.length || 'unknown count');
         
-        // Send ticket confirmation email
+        // Send ticket confirmation email asynchronously (non-blocking)
         if (generatedTickets && generatedTickets.length > 0) {
-          try {
-            console.log('📧 Sending ticket confirmation email to:', customerEmail);
-            await sendTicketConfirmationEmail({
-              to: customerEmail,
-              customerName,
-              order,
-              tickets: generatedTickets,
-              event
-            });
-            console.log('✅ Ticket confirmation email sent successfully');
-          } catch (emailError) {
-            console.error('❌ Error sending ticket confirmation email:', emailError);
-            // Don't fail the order if email fails
-          }
+          console.log('📧 Scheduling ticket confirmation email to:', customerEmail);
+          // Send email in background without blocking order creation
+          setImmediate(async () => {
+            try {
+              await sendTicketConfirmationEmail({
+                to: customerEmail,
+                customerName,
+                order,
+                tickets: generatedTickets,
+                event
+              });
+              console.log('✅ Ticket confirmation email sent successfully');
+            } catch (emailError) {
+              console.error('❌ Error sending ticket confirmation email:', emailError);
+              // Don't fail the order if email fails
+            }
+          });
         }
       } catch (ticketError) {
         console.error('❌ Error generating tickets for dummy session:', ticketError);
@@ -563,7 +574,7 @@ exports.downloadOrderTickets = async (req, res) => {
         console.log('✅ downloadOrderTickets - PDF generated successfully, size:', pdfBuffer.length);
 
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="ticket-${ticket.ticketNumber}.pdf"`);
+        res.setHeader('Content-Disposition', `attachment; filename="ticket-${ticket.ticketCode}.pdf"`);
         res.setHeader('Content-Length', pdfBuffer.length);
         res.send(pdfBuffer);
         return;
@@ -828,7 +839,7 @@ exports.updateOrderStatus = async (req, res) => {
     }
 
     // Handle status-specific actions
-    if (status === 'confirmed') {
+    if (status === 'confirmed' || status === 'paid') {
       await order.generateTickets();
     }
 
@@ -1059,9 +1070,9 @@ exports.generateTickets = async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to generate tickets for this order' });
     }
 
-    if (order.status !== 'confirmed') {
+    if (order.status !== 'confirmed' && order.status !== 'paid') {
       return res.status(400).json({
-        message: 'Order must be confirmed before generating tickets'
+        message: 'Order must be confirmed or paid before generating tickets'
       });
     }
 
@@ -1309,13 +1320,14 @@ exports.payOrder = async (req, res) => {
                 holderEmail: ticket.holderEmail || order.customerEmail,
                 qrCode: ticket.qrCode,
                 id: ticket.id,
-                qrCodeToken: ticket.qrCodeToken
+                qrCodeToken: ticket.qrCodeToken,
+                createdAt: ticket.createdAt
               }
             };
             
             const pdfBuffer = await generateTicketPDF(ticketData);
             return {
-              filename: `Ticket-${ticket.ticketCode}.pdf`,
+              filename: `ticket-${ticket.ticketCode}.pdf`,
               content: pdfBuffer
             };
           }));

@@ -48,7 +48,7 @@ function generateTicketPDF({ event, ticket }) {
       // Event details
     doc.fontSize(16).text(`Event: ${event?.name || event?.title || 'Unknown Event'}`);
     doc.text(`Venue: ${event?.venue || event?.location || 'TBD'}`);
-    doc.text(`Date: ${event?.startDate ? new Date(event.startDate).toLocaleString() : 'TBD'}`);
+    doc.text(`Event Date: ${event?.startDate ? new Date(event.startDate).toLocaleString() : 'TBD'}`);
     doc.moveDown();
       
       // Ticket details
@@ -56,6 +56,14 @@ function generateTicketPDF({ event, ticket }) {
     if (ticket?.seatString) doc.text(`Seat: ${ticket.seatString}`);
     doc.text(`Holder: ${ticket?.holderName || ticket?.customerName || 'N/A'}`);
     doc.text(`Email: ${ticket?.holderEmail || ticket?.customerEmail || 'N/A'}`);
+    
+    // Add unique ticket information
+    if (ticket?.createdAt) {
+      doc.text(`Issued: ${new Date(ticket.createdAt).toLocaleString()}`);
+    }
+    if (ticket?.id) {
+      doc.fontSize(10).text(`Ticket ID: ${ticket.id}`, { align: 'right' });
+    }
       
       // Use the same QR code generation as the ticket model for consistency
       // Use the same QR code token from the database for consistency
@@ -300,20 +308,22 @@ async function sendQueueErrorNotification(to, eventName, errorType, errorDetails
 async function sendTicketConfirmationEmail({ to, customerName, order, tickets, event }) {
   const subject = `🎫 Your tickets for ${event.name} - Order ${order.orderNumber}`;
   
-  // Generate PDF attachments for each ticket
-  const attachments = [];
-  for (const ticket of tickets) {
-    try {
-      const pdfBuffer = await generateTicketPDF({ event, ticket });
-      attachments.push({
-        filename: `ticket-${ticket.ticketNumber}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf'
-      });
-    } catch (error) {
-      console.error('Error generating PDF for ticket:', ticket.id, error);
-    }
-  }
+  // Generate PDF attachments for each ticket in parallel
+  const attachments = await Promise.all(
+    tickets.map(async (ticket) => {
+      try {
+        const pdfBuffer = await generateTicketPDF({ event, ticket });
+        return {
+          filename: `ticket-${ticket.id}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf'
+        };
+      } catch (error) {
+        console.error('Error generating PDF for ticket:', ticket.id, error);
+        return null; // Skip failed PDFs
+      }
+    })
+  ).then(results => results.filter(Boolean)); // Remove null results
 
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -379,6 +389,39 @@ async function sendTicketConfirmationEmail({ to, customerName, order, tickets, e
   await sendTicketEmail({ to, subject, text, html, attachments });
 }
 
+async function sendPurchaseReminderNotification(to, userName, eventName, minutesLeft) {
+  // Skip email sending if SMTP is not configured
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.log('⚠️  SMTP not configured, skipping email reminder for:', to);
+    return;
+  }
+
+  const mailOptions = {
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to,
+    subject: `Reminder: Complete Your Ticket Purchase for ${eventName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #333;">Complete Your Ticket Purchase</h2>
+        <p>Hello ${userName},</p>
+        <p>This is a friendly reminder that you have an active purchase session for <strong>${eventName}</strong>.</p>
+        <p>Your session will expire in <strong>${minutesLeft} minutes</strong>.</p>
+        <p>Please complete your ticket purchase before the session expires.</p>
+        <div style="margin: 20px 0;">
+          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/checkout" 
+             style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
+            Complete Purchase
+          </a>
+        </div>
+        <p>If you have any questions, please contact our support team.</p>
+        <p>Best regards,<br>Ticket Ghar Team</p>
+      </div>
+    `
+  };
+  
+  return transporter.sendMail(mailOptions);
+}
+
 module.exports = { 
   sendTicketEmail, 
   generateTicketPDF, 
@@ -389,5 +432,6 @@ module.exports = {
   sendQueueProcessingNotification,
   sendQueueErrorNotification,
   sendQueueJoinedNotification,
-  sendTicketConfirmationEmail
+  sendTicketConfirmationEmail,
+  sendPurchaseReminderNotification
 }; 

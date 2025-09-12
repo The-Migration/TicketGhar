@@ -95,7 +95,7 @@ const PurchasePage: React.FC = () => {
 
   const totalTickets = currentSession.selectedTickets.reduce((sum, ticket) => sum + ticket.quantity, 0);
   const totalAmount = currentSession.selectedTickets.reduce((sum, ticket) => 
-    sum + (ticket.ticketType.price * ticket.quantity), 0
+    sum + ((typeof ticket.ticketType.price === 'number' ? ticket.ticketType.price : parseFloat(ticket.ticketType.price || '0')) * ticket.quantity), 0
   );
 
   return (

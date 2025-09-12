@@ -485,7 +485,7 @@ const AdminOrders: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div>
                           <div className="text-sm font-medium text-gray-900">
-                            ${order.totalAmount.toFixed(2)}
+                            ${typeof order.totalAmount === 'number' ? order.totalAmount.toFixed(2) : parseFloat(order.totalAmount || '0').toFixed(2)}
                           </div>
                           <div className="text-xs text-gray-500">
                             {order.items.length} item{order.items.length !== 1 ? 's' : ''}

@@ -267,12 +267,28 @@ exports.logout = (req, res) => {
 exports.getProfile = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      attributes: { exclude: ['password'] }
+      attributes: { exclude: ['password', 'otpCode', 'otpExpiresAt'] }
     });
+
+    // Format user data to match frontend expectations
+    const userData = {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      phone: user.phone,
+      role: user.role,
+      status: user.status,
+      isVerified: user.isEmailVerified, // Map isEmailVerified to isVerified for frontend
+      isEmailVerified: user.isEmailVerified, // Keep original field too
+      lastLogin: user.lastLogin,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    };
 
     res.status(200).json({
       success: true,
-      user
+      user: userData
     });
   } catch (error) {
     console.error('Get profile error:', error);

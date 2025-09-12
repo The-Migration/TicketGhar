@@ -69,7 +69,7 @@ const OrderConfirmationPage: React.FC = () => {
   };
 
   const generateQRCode = (orderId: string) => {
-    return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=TKT-${orderId.slice(-8).toUpperCase()}`;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${orderId}`;
   };
 
   if (isLoading) {
@@ -165,6 +165,12 @@ const OrderConfirmationPage: React.FC = () => {
                       <p className="text-xs text-gray-400 uppercase tracking-wider">Date</p>
                       <p className="font-bold text-white text-sm">
                         {formatEventDate(currentEvent.startDate || currentEvent.date || new Date().toISOString())}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-400 uppercase tracking-wider">Ticket ID</p>
+                      <p className="font-mono font-bold text-sm text-indigo-300">
+                        {latestOrder?.id || 'default'}
                       </p>
                     </div>
                   </div>

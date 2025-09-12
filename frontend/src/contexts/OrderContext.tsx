@@ -26,6 +26,17 @@ interface Order {
     quantity: number;
     price: number;
     totalPrice?: number;
+    tickets?: Array<{
+      id: string;
+      ticketTypeId: string;
+      ticketType: {
+        id: string;
+        name: string;
+        price: number;
+      };
+      quantity: number;
+      totalPrice: number;
+    }>;
   }>;
   tickets: Array<{
     id: string;
@@ -123,7 +134,9 @@ export const OrderProvider: React.FC<OrderProviderProps> = ({ children }) => {
 
       if (response.ok) {
         const data = await response.json();
-        setCurrentOrder(data);
+        console.log('OrderContext: fetchOrder response data:', data);
+        setCurrentOrder(data.order || data);
+        console.log('OrderContext: Current order set to:', data.order || data);
       } else {
         throw new Error('Failed to fetch order');
       }

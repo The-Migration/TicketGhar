@@ -119,10 +119,13 @@ const UserDashboard: React.FC = () => {
                       <div className="flex items-center justify-between">
                         <div className="flex-1">
                           <h3 className="text-lg font-medium text-white">
-                            {order.event.title}
+                            {order.event?.title || order.event?.name || 'Unknown Event'}
                           </h3>
                           <p className="text-sm text-gray-400">
-                            {formatEventDate(order.event.date)} at {formatEventTime(order.event.date)}
+                            {order.event?.startDate || order.event?.date ? 
+                              `${formatEventDate(order.event.startDate || order.event.date)} at ${formatEventTime(order.event.startDate || order.event.date)}` : 
+                              'Date not available'
+                            }
                           </p>
                           <p className="text-sm text-gray-400">
                             {order.tickets.length} ticket{order.tickets.length !== 1 ? 's' : ''}

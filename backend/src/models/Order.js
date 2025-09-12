@@ -37,7 +37,7 @@ module.exports = (sequelize) => {
       defaultValue: 'pending',
       allowNull: false,
       validate: {
-        isIn: [['pending', 'paid', 'cancelled', 'refunded', 'failed']]
+        isIn: [['pending', 'confirmed', 'paid', 'cancelled', 'refunded', 'failed']]
       }
     },
     totalAmount: {
@@ -135,7 +135,7 @@ module.exports = (sequelize) => {
       type: DataTypes.STRING(20),
       allowNull: true,
       validate: {
-        isIn: [['pending', 'authorized', 'captured', 'failed', 'refunded']]
+        isIn: [['pending', 'paid', 'failed', 'refunded']]
       },
       field: 'payment_status'
     },
@@ -261,7 +261,7 @@ module.exports = (sequelize) => {
         if (!order.orderNumber) {
           order.orderNumber = generateOrderNumber();
         }
-        if (!order.expiresAt) {
+        if (!order.expiresAt && order.status === 'pending') {
           order.expiresAt = new Date(Date.now() + 8 * 60 * 1000); // 8 minutes
         }
       },
@@ -382,7 +382,7 @@ module.exports = (sequelize) => {
             orderItemId: item.id,
             eventId: eventId,
             ticketTypeId: item.ticketTypeId,
-            status: 'valid',
+            status: 'active',
             holderName: this.customerName,
             holderEmail: this.customerEmail,
             holderPhone: this.customerPhone,

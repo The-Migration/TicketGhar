@@ -44,20 +44,36 @@ const TicketDetailPage: React.FC = () => {
       if (foundOrder) {
         console.log('✅ TicketDetailPage - Found order:', foundOrder.id);
         setOrder(foundOrder);
-        // For now, create mock tickets - in real implementation, these would come from the order
-        const ticketCount = foundOrder.orderItems?.reduce((total: number, item: any) => total + (item.quantity || 1), 0) || 1;
-        const mockTickets = Array.from({ length: ticketCount }, (_, index) => ({
-          id: `${foundOrder!.id}-${index + 1}`,
-          ticketNumber: `TKT-${foundOrder!.id.slice(-8).toUpperCase()}-${index + 1}`,
-          orderId: foundOrder!.id,
-          eventName: foundOrder!.event?.name || 'Event Name',
-          eventDate: foundOrder!.event?.startDate || foundOrder!.event?.date,
-          eventVenue: foundOrder!.event?.venue || foundOrder!.event?.location || 'Venue TBD',
-          ticketType: foundOrder!.orderItems?.[0]?.ticketType?.name || 'General Admission',
-          customerName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Customer Name',
-          eventImage: foundOrder!.event?.imageUrl || 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjMWYyOTM3Ii8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iI2ZmZmZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkV2ZW50IEltYWdlPC90ZXh0Pjwvc3ZnPg=='
-        }));
-        setTickets(mockTickets);
+        
+        // Extract real tickets from order items
+        const realTickets = [];
+        if (foundOrder.orderItems) {
+          for (const orderItem of foundOrder.orderItems) {
+            if (orderItem.tickets && Array.isArray(orderItem.tickets)) {
+              for (const ticket of orderItem.tickets) {
+                realTickets.push({
+                  id: ticket.id,
+                  ticketCode: ticket.id, // Use ticket ID as the single identifier
+                  ticketNumber: ticket.id, // Use ticket ID as the single identifier
+                  orderId: foundOrder.id,
+                  eventName: foundOrder.event?.name || foundOrder.event?.title || 'Event Name',
+                  eventDate: foundOrder.event?.startDate || foundOrder.event?.date,
+                  eventVenue: foundOrder.event?.venue || foundOrder.event?.location || 'Venue TBD',
+                  ticketType: orderItem.ticketType?.name || 'General Admission',
+                  customerName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Customer Name',
+                  holderEmail: user?.email || '',
+                  holderPhone: '', // Phone not available in user data
+                  eventImage: foundOrder.event?.imageUrl || 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjMWYyOTM3Ii8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSIxOCIgZmlsbD0iI2ZmZmZmZiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkV2ZW50IEltYWdlPC90ZXh0Pjwvc3ZnPg==',
+                  createdAt: foundOrder.createdAt,
+                  qrCodeToken: ticket.id // Use ticket ID as QR code token
+                });
+              }
+            }
+          }
+        }
+        
+        console.log('🎫 TicketDetailPage - Found real tickets:', realTickets.length);
+        setTickets(realTickets);
       } else {
         console.log('❌ TicketDetailPage - Order not found with ID:', id);
       }
@@ -77,8 +93,10 @@ const TicketDetailPage: React.FC = () => {
     });
   };
 
-  const generateQRCode = (ticketNumber: string) => {
-    return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${ticketNumber}`;
+  const generateQRCode = (ticket: any) => {
+    // Use ticket ID as the single identifier for QR code
+    const qrData = ticket.id;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${qrData}`;
   };
 
   const handleDownloadAll = async () => {
@@ -195,7 +213,7 @@ const TicketDetailPage: React.FC = () => {
                 <div className="flex items-center space-x-4">
                   <div className="w-24 h-24 p-1 bg-white rounded-lg flex-shrink-0">
                     <img
-                      src={generateQRCode(ticket.ticketNumber)}
+                      src={generateQRCode(ticket)}
                       alt="QR Code"
                       className="w-full h-full object-contain"
                     />
@@ -209,11 +227,11 @@ const TicketDetailPage: React.FC = () => {
                       <p className="text-xs text-gray-400 uppercase tracking-wider">Date</p>
                       <p className="font-bold text-white">{formatEventDate(ticket.eventDate)}</p>
                     </div>
+                    <div>
+                      <p className="text-xs text-gray-400 uppercase tracking-wider">Ticket ID</p>
+                      <p className="font-mono font-bold text-lg text-indigo-300">{ticket.ticketCode}</p>
+                    </div>
                   </div>
-                </div>
-                <div className="mt-4 border-t border-gray-700 pt-4">
-                  <p className="text-xs text-gray-400 uppercase tracking-wider">Ticket ID</p>
-                  <p className="font-mono font-bold text-lg text-indigo-300">{ticket.ticketNumber}</p>
                 </div>
               </div>
             </div>

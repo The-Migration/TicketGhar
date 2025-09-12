@@ -135,13 +135,14 @@ const CheckoutPage: React.FC = () => {
         }
       };
       
-      // Only include purchaseSessionId if it's a valid UUID (not our dummy one)
-      if (purchaseSessionId && purchaseSessionId.startsWith('session_')) {
-        // This is our dummy session ID, don't include it
-        console.log('Skipping dummy purchase session ID for development');
-      } else if (purchaseSessionId) {
-        // This is a real purchase session ID
+      // Include purchaseSessionId for both dummy and real sessions
+      if (purchaseSessionId) {
         orderData.purchaseSessionId = purchaseSessionId;
+        if (purchaseSessionId.startsWith('session_')) {
+          console.log('Including dummy purchase session ID for development');
+        } else {
+          console.log('Including real purchase session ID');
+        }
       }
 
       console.log('Creating order with data:', orderData);
